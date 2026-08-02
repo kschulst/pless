@@ -1,0 +1,52 @@
+# pless-konfigurasjon. Ingen secrets her — de bor i .env (cache) og Bitwarden (kilde).
+
+[target]
+# "vm": lokal Multipass-VM for utvikling/test — "pi": Raspberry Pi — "hetzner": Hetzner Cloud
+type = "vm"
+
+[vm]
+name = "pless-dev"
+cpus = 2
+memory = "4G"
+disk = "20G"
+data_size_gb = 5      # loop-fil som simulerer den fysiske datadisken
+
+[pi]
+host = ""             # fritt vertsnavn: <ditt-navn>.local, tailscale-navn eller IP
+user = "ubuntu"       # brukeren du opprettet i RPi Imager
+data_mode = "file"    # "file": LUKS-fil på NVMe — "partition": egen blokk-enhet
+data_size_gb = 200    # kun for data_mode="file"; sparse, tar ikke plass før den fylles
+data_device = ""      # kun for data_mode="partition", bruk /dev/disk/by-id/...
+
+[hetzner]
+location = "hel1"
+server_type = "cx23"      # 2 vCPU / 4 GB RAM / 40 GB NVMe — verifisert holder for < 5 GB dokumenter
+image = "ubuntu-24.04"
+server_name = "paperless-01"
+
+[ssh]
+user = "root"
+key_path = "~/.ssh/id_ed25519"
+
+[access]
+# "tailscale": Paperless bindes til localhost, eksponeres via `tailscale serve` på tailnet.
+# "ssh-tunnel": ingen tailscale; tilgang via `pless tunnel` (ssh -L).
+mode = "tailscale"
+
+[paperless]
+version = "2.20.15"   # eksakt image-tag; bumpes bevisst
+timezone = "Europe/Oslo"
+ocr_languages = "nor+eng"
+admin_user = "admin"
+
+[paths]
+local_documents = "./documents"
+local_backups = "./backups"
+
+[storage]
+min_free_gb_after_upload = 10
+max_disk_usage_percent_after_upload = 70
+
+[backup]
+# Tom = offsite deaktivert. Settes til f.eks. "b2:pless-backup:paperless" når B2 er klar.
+restic_repository = ""

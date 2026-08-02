@@ -1,0 +1,16 @@
+# Secrets — Bitwarden er source of truth, .env er kun lokal cache
+.env
+
+# Lokale data som aldri skal i git
+documents/
+backups/
+.pless/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
