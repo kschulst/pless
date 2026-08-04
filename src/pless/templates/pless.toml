@@ -1,0 +1,62 @@
+# pless configuration. No secrets here — those live in .env (a cache) and in
+# your password manager (the source of truth).
+
+[target]
+# "vm": local development VM — "pi": Raspberry Pi — "hetzner": Hetzner Cloud
+type = "vm"
+
+[tailscale]
+# Which tailnet the machine joins is decided by TS_AUTHKEY in .env — one key
+# belongs to one tailnet. If you have several tailnets, you choose between
+# them by choosing the key.
+login_server = ""     # empty = Tailscale's control plane; a URL for self-hosted Headscale
+hostname = ""         # empty = use the machine's own hostname
+
+[access]
+mode = "tailscale"    # "tailscale" | "ssh-tunnel"
+
+[vm]
+backend = "lima"      # "lima" = Debian 13 + bootstrap; "multipass" = Ubuntu + cloud-init
+name = "pless-dev"
+cpus = 2
+memory = "4G"
+disk = "20G"
+data_size_gb = 5      # loop file standing in for the physical data disk
+
+[pi]
+host = ""             # <hostname>.local, a Tailscale name, or an IP address
+user = "ubuntu"       # the user you created when flashing
+data_mode = "file"    # "file" = LUKS file on the root filesystem; "partition" = own block device
+# Sparse: costs nothing until filled. Size it so a full archive still leaves
+# room for the OS — roughly (disk size - 15 GB for OS and images - 20 GB margin).
+# On a 256 GB disk, 100 is comfortable; on a 32 GB card, use about 16.
+data_size_gb = 100
+data_device = ""      # data_mode="partition" only; use /dev/disk/by-id/...
+
+[hetzner]
+location = "hel1"
+server_type = "cx23"
+image = "debian-13"
+server_name = "paperless-01"
+
+[ssh]
+user = "root"
+key_path = "~/.ssh/id_ed25519"
+
+[paperless]
+version = "2.20.15"   # exact image tag; bump it deliberately
+timezone = "Europe/Oslo"
+ocr_languages = "nor+eng"
+admin_user = "admin"
+
+[paths]
+local_documents = "./documents"
+local_backups = "./backups"
+
+[storage]
+min_free_gb_after_upload = 10
+max_disk_usage_percent_after_upload = 70
+
+[backup]
+# Empty disables off-site backup. Set to e.g. "b2:my-bucket:paperless" once ready.
+restic_repository = ""

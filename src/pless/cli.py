@@ -25,6 +25,7 @@ from pless import (
     hetzner,
     hostspec,
     preflight,
+    scaffold,
     sshexec,
     storage,
     tailscale,
@@ -83,19 +84,21 @@ def init(
         False, "--secrets", help="Generate strong secrets and write them to .env."
     ),
 ) -> None:
-    """Create .env from .env.example and verify that pless.toml exists."""
-    if config.find_config_file() is None:
-        _fail("No pless.toml found — run this from the project directory.")
+    """Set up a working directory: pless.toml, .env.example and .env."""
+    # Templates ship inside the package, so this works the same whether pless
+    # was installed from PyPI or is being run from a clone.
+    result = scaffold.scaffold(Path.cwd())
+    for name in result.created:
+        console.print(f"[green]✓[/green] Created {name}.")
+    for name in result.kept:
+        console.print(f"[yellow]•[/yellow] {name} already exists — leaving it alone.")
 
     env_path = Path(".env")
-    example_path = Path(".env.example")
     if env_path.exists():
         console.print("[yellow]•[/yellow] .env already exists — leaving it alone.")
-    elif example_path.exists():
-        shutil.copy(example_path, env_path)
-        console.print("[green]✓[/green] Created .env from .env.example.")
     else:
-        _fail("Found neither .env nor .env.example.")
+        shutil.copy(Path(".env.example"), env_path)
+        console.print("[green]✓[/green] Created .env from .env.example.")
 
     if with_secrets:
         content = env_path.read_text()

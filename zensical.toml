@@ -27,6 +27,7 @@ nav = [
     "cookbook/verify-security.md",
     "cookbook/storage.md",
     "cookbook/switch-target.md" ] },
+  { "Development" = "development/index.md" },
   { "Reference" = [
     "reference/commands.md",
     "reference/configuration.md" ] } ]
