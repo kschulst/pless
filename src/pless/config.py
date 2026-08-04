@@ -1,4 +1,4 @@
-"""Konfigurasjon: pless.toml (ikke-hemmelig) + .env/miljø (secrets)."""
+"""Configuration: pless.toml (non-secret) plus .env and the environment (secrets)."""
 
 from __future__ import annotations
 
@@ -16,14 +16,14 @@ class TargetConfig(BaseModel):
 
 
 class VmConfig(BaseModel):
-    # "lima": Debian 13 + SSH-bootstrap (speiler Pi/RPi OS Trixie)
-    # "multipass": Ubuntu + cloud-init (speiler Hetzner)
+    # "lima": Debian 13 provisioned by SSH bootstrap — mirrors a Pi
+    # "multipass": Ubuntu provisioned by cloud-init — mirrors Hetzner
     backend: str = "lima"
     name: str = "pless-dev"
     cpus: int = 2
     memory: str = "4G"
     disk: str = "20G"
-    data_size_gb: int = 5  # størrelse på loop-fila som simulerer datadisken
+    data_size_gb: int = 5  # size of the loop file standing in for the data disk
 
     @property
     def memory_gb(self) -> int:
@@ -35,22 +35,23 @@ class VmConfig(BaseModel):
 
 
 def _parse_size_gb(value: str) -> int:
-    """'4G' / '4GB' / '4' → 4. Lima vil ha tall, Multipass vil ha streng."""
+    """'4G' / '4GB' / '4' -> 4. Lima wants a number, Multipass wants a string."""
     digits = "".join(ch for ch in value if ch.isdigit())
     if not digits:
-        raise ValueError(f"Kunne ikke tolke størrelse: {value!r}")
+        raise ValueError(f"Could not parse size: {value!r}")
     return int(digits)
 
 
 class PiConfig(BaseModel):
-    host: str = ""  # tailscale-navn, mDNS-navn eller IP
+    host: str = ""  # Tailscale name, mDNS name or IP address
     user: str = "ubuntu"
-    # "file": LUKS-fil på NVMe-en (Ubuntu auto-grower root til hele disken, så
-    # det finnes ingen ledig plass å partisjonere — se beslutning #24).
-    # "partition": eksisterende blokk-enhet, f.eks. en egen disk.
+    # "file": a LUKS file on the root filesystem. The default, because both
+    # Ubuntu and Raspberry Pi OS grow the root partition to fill the disk on
+    # first boot, leaving no free space to partition.
+    # "partition": an existing block device, such as a dedicated disk.
     data_mode: str = "file"
-    data_size_gb: int = 200  # kun for data_mode="file"
-    data_device: str = ""  # kun for data_mode="partition", bruk /dev/disk/by-id/...
+    data_size_gb: int = 200  # data_mode="file" only
+    data_device: str = ""  # data_mode="partition" only; use /dev/disk/by-id/...
 
 
 class HetznerConfig(BaseModel):
@@ -74,15 +75,15 @@ class AccessConfig(BaseModel):
 
 
 class TailscaleConfig(BaseModel):
-    # Hvilket tailnet boksen blir med i avgjøres av TS_AUTHKEY — én nøkkel
-    # hører til ett tailnet. Tom login_server = Tailscales egen kontrollplan;
-    # sett den til en Headscale-URL for selvhostet nett.
+    # Which tailnet the machine joins is decided by TS_AUTHKEY — one key
+    # belongs to one tailnet. An empty login_server means Tailscale's own
+    # control plane; set a Headscale URL for a self-hosted one.
     login_server: str = ""
-    hostname: str = ""  # tom = bruk maskinens eget vertsnavn
+    hostname: str = ""  # empty means use the machine's own hostname
 
 
 class PaperlessConfig(BaseModel):
-    version: str = "2.20.15"  # eksakt image-tag; bumpes bevisst (senere: `pless update`)
+    version: str = "2.20.15"  # exact image tag, bumped deliberately
     timezone: str = "Europe/Oslo"
     ocr_languages: str = "nor+eng"
     admin_user: str = "admin"
@@ -125,7 +126,10 @@ class Config(BaseModel):
 
 
 class Secrets(BaseSettings):
-    """Leses fra miljø og .env. Bitwarden er source of truth; .env er cache."""
+    """Read from the environment and .env.
+
+    Your password manager is the source of truth; .env is a local cache.
+    """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -141,7 +145,7 @@ class Secrets(BaseSettings):
 
 
 def find_config_file(start: Path | None = None) -> Path | None:
-    """Let etter pless.toml i cwd og oppover — samme modell som git."""
+    """Look for pless.toml in the current directory and upwards, like git."""
     current = (start or Path.cwd()).resolve()
     for directory in [current, *current.parents]:
         candidate = directory / CONFIG_FILENAME

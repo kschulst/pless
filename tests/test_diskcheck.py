@@ -22,23 +22,23 @@ def test_parse_df_rejects_garbage() -> None:
 
 
 def test_small_upload_on_healthy_disk_proceeds() -> None:
-    disk = parse_df_output(DF_OUTPUT)  # ~40 GB disk, ~8 GB brukt
+    disk = parse_df_output(DF_OUTPUT)  # ~40 GB disk, ~8 GB used
     projection = project(disk, upload_bytes=3 * GB, min_free_gb=10, max_used_percent=70)
-    # 3 GB * 3.4 ≈ 10 GB vekst → ~18 GB brukt av 40 → ok
+    # 3 GB * 3.4 = ~10 GB growth -> ~18 GB of 40 used -> fine
     assert projection.recommendation == Recommendation.PROCEED
 
 
 def test_large_upload_wants_more_storage() -> None:
     disk = parse_df_output(DF_OUTPUT)
     projection = project(disk, upload_bytes=15 * GB, min_free_gb=10, max_used_percent=70)
-    # 15 GB * 3.4 ≈ 51 GB vekst på en 40 GB-disk → håpløst uansett batching
+    # 15 GB * 3.4 = ~51 GB growth on a 40 GB disk -> hopeless regardless of batching
     assert projection.recommendation == Recommendation.ADD_STORAGE
 
 
 def test_borderline_upload_suggests_smaller_batches() -> None:
     disk = parse_df_output(DF_OUTPUT)
     projection = project(disk, upload_bytes=6 * GB, min_free_gb=10, max_used_percent=70)
-    # ~20 GB vekst → over terskler, men innenfor disken hvis eksport ryddes/batches
+    # ~20 GB growth -> over the thresholds, but fits if exports are cleaned or batched
     assert projection.recommendation == Recommendation.REDUCE_BATCH
 
 

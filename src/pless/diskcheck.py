@@ -1,6 +1,7 @@
-"""Diskestimator: projiser diskbruk på serveren etter import, gi anbefaling.
+"""Disk estimator: project usage on the target after import and advise.
 
-Ren logikk uten I/O — testbar uten server. df-output hentes via sshexec.
+Pure logic with no I/O, so it is testable without a machine. The df output
+is collected by sshexec.
 """
 
 from __future__ import annotations
@@ -8,10 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-# Konservative vekstfaktorer, bevisst i overkant:
-# - Paperless beholder originalen OG lager en OCR-et PDF/A-arkivkopi (~1x for skann),
-#   pluss thumbnails, Postgres-rader og søkeindeks. 2.2x dekker dette med margin.
-# - document_exporter legger en full ekstra kopi (original + metadata) på samme disk.
+# Deliberately pessimistic growth factors:
+# - Paperless keeps the original AND writes an OCR'd PDF/A archive copy,
+#   plus thumbnails, Postgres rows and the search index. 2.2x covers it.
+# - document_exporter writes another full copy onto the same disk.
 INGEST_GROWTH_FACTOR = 2.2
 EXPORT_COPY_FACTOR = 1.2
 
@@ -26,7 +27,7 @@ class Recommendation(StrEnum):
 
 @dataclass
 class DiskSnapshot:
-    """Fra `df -Pk <path>` på serveren. Alle verdier i kibibyte."""
+    """From `df -Pk <path>` on the target. All values in kibibytes."""
 
     total_kb: int
     used_kb: int
@@ -50,10 +51,10 @@ class DiskSnapshot:
 
 
 def parse_df_output(output: str) -> DiskSnapshot:
-    """Parse POSIX-format `df -Pk <path>` (header + én datalinje)."""
+    """Parse POSIX `df -Pk <path>` output: a header plus one data line."""
     lines = [line for line in output.strip().splitlines() if line.strip()]
     if len(lines) < 2:
-        raise ValueError(f"Uventet df-output: {output!r}")
+        raise ValueError(f"Unexpected df output: {output!r}")
     fields = lines[-1].split()
     # Filesystem 1024-blocks Used Available Capacity Mounted-on
     return DiskSnapshot(total_kb=int(fields[1]), used_kb=int(fields[2]), avail_kb=int(fields[3]))
@@ -87,8 +88,8 @@ class Projection:
             and self.projected_used_percent <= self.max_used_percent
         ):
             return Recommendation.PROCEED
-        # Hvis selv en tom disk ikke hadde plass til veksten innenfor grensene,
-        # hjelper det ikke å dele opp i batcher — disken er for liten.
+        # If even an empty disk could not hold the growth within the limits,
+        # batching will not help — the disk is simply too small.
         free_limit_bytes = self.min_free_gb * GB
         pct_limit_bytes = self.disk.total_bytes * self.max_used_percent / 100
         if self.projected_growth_bytes > min(

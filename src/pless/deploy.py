@@ -1,4 +1,4 @@
-"""Deploy av Paperless-stacken til target: filer, systemd-unit, oppstart, helse."""
+"""Deploying the Paperless stack to a target: files, systemd unit, start, health."""
 
 from __future__ import annotations
 
@@ -34,14 +34,16 @@ def _run_ok(
 ) -> str:
     result = _run(target, command, input_text, timeout)
     if not result.ok:
-        raise DeployError(f"Fjernkommando feilet: {result.stderr.strip() or result.stdout.strip()}")
+        raise DeployError(
+            f"Remote command failed: {result.stderr.strip() or result.stdout.strip()}"
+        )
     return result.stdout.strip()
 
 
 def _write_remote_file(
     target: TargetHost, path: str, content: str, mode: str = "0644", owner: str | None = None
 ) -> None:
-    """Skriv fil via stdin — innholdet (inkl. secrets) rører aldri argv eller temp-filer."""
+    """Write a file via stdin, so its contents never reach argv or a temp file."""
     quoted = shlex.quote(path)
     _run_ok(target, f"sudo tee {quoted} > /dev/null && sudo chmod {mode} {quoted}", content)
     if owner:
@@ -49,17 +51,17 @@ def _write_remote_file(
 
 
 def install(cfg: config.Config, secrets: config.Secrets, target: TargetHost) -> None:
-    """Legg ut compose-fil, server-.env og systemd-unit, og start stacken."""
+    """Write the compose file, server-side .env and systemd unit, then start."""
     state = storage.status(cfg, target)
     if not state.is_mounted:
         raise DeployError(
-            f"{storage.MOUNTPOINT} er ikke montert — kjør `pless unlock` først. "
-            "Stacken skal aldri deployes utenfor den krypterte disken."
+            f"{storage.MOUNTPOINT} is not mounted — run `pless unlock` first. "
+            "The stack must never be deployed outside the encrypted volume."
         )
 
     subdirs = " ".join(f"{composegen.INSTALL_DIR}/{d}" for d in DATA_SUBDIRS)
     _run_ok(target, f"sudo mkdir -p {subdirs}")
-    # UID/GID 1000 matcher USERMAP i compose; postgres-containeren eier sin egen mappe.
+    # UID/GID 1000 matches USERMAP in the compose file; postgres owns its own directory.
     _run_ok(
         target,
         f"sudo chown -R 1000:1000 {composegen.INSTALL_DIR}/consume "
@@ -79,7 +81,7 @@ def install(cfg: config.Config, secrets: config.Secrets, target: TargetHost) -> 
     )
     _write_remote_file(target, "/etc/systemd/system/paperless.service", composegen.SYSTEMD_UNIT)
     _run_ok(target, "sudo systemctl daemon-reload")
-    # Første oppstart puller images (~2 GB) — romslig timeout.
+    # The first start pulls roughly 2 GB of images — allow plenty of time.
     _run_ok(target, "sudo systemctl start paperless.service", timeout=900)
 
 
@@ -90,7 +92,7 @@ def compose(target: TargetHost, args: str, timeout: int = 120) -> str:
 
 
 def http_status(target: TargetHost) -> str:
-    """HTTP-status fra Paperless på targetets localhost. '000' = ingen respons."""
+    """HTTP status from Paperless on the target's localhost. '000' means no answer."""
     return _run_ok(
         target,
         f"curl -s -o /dev/null -w '%{{http_code}}' -m 5 http://127.0.0.1:{composegen.WEB_PORT} "
@@ -99,11 +101,10 @@ def http_status(target: TargetHost) -> str:
 
 
 def wait_healthy(target: TargetHost, timeout_seconds: int = 300) -> bool:
-    """Vent til webserveren svarer. Første oppstart migrerer databasen — tar tid."""
+    """Wait for the web server to answer. The first start migrates the database."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        code = http_status(target)
-        if code in ("200", "302"):
+        if http_status(target) in ("200", "302"):
             return True
         time.sleep(10)
     return False

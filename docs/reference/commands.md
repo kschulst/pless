@@ -126,6 +126,25 @@ network can reach the machine.
 Refuses to run unless Tailscale is confirmed working, so you cannot lock yourself out. If
 the tailnet is later lost entirely, recovery is a monitor and keyboard on the machine.
 
+### `pless preflight [--drill]`
+
+Answers one question: **is this installation fit to be trusted with documents?**
+
+Checks that the target is reachable, the encrypted volume is open and mounted, Paperless is
+answering, the exposure audit is clean, and that off-site backup exists and has been restored
+from at least once. Exits non-zero if anything blocking fails.
+
+With `--drill`, it also locks and unlocks the volume, then waits for the stack to return.
+That is the only way to *prove* the passphrase you believe in is the one that works — and it
+costs nothing while the volume is empty, which is exactly why it belongs before your first
+import rather than after.
+
+!!! warning "Preflight will not pass yet"
+
+    Backup is not implemented, so the recoverability checks fail by design. That is the
+    honest answer: this machine currently holds the only copy of whatever you import, so
+    keep your originals elsewhere.
+
 ### `pless audit [--json]`
 
 Checks network exposure and storage encryption. Exits non-zero on findings, so it works in

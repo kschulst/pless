@@ -1,10 +1,11 @@
-"""Tailscale på target: installasjon, innmelding og status.
+"""Tailscale on the target: install, join, status.
 
-Tailnet velges av auth-nøkkelen (TS_AUTHKEY) — én nøkkel hører til ett tailnet.
-Selvhostet kontrollplan (Headscale) støttes via login_server.
+Which tailnet the machine joins is decided by the auth key (TS_AUTHKEY) — one
+key belongs to one tailnet. A self-hosted control plane (Headscale) is
+supported through login_server.
 
-Etter at Tailscale er oppe, kan `pless harden` stenge SSH mot LAN-et slik at
-boksen ikke har én eneste åpen port for noen på det lokale nettet.
+Once Tailscale is up, `pless harden` can close SSH to the LAN so the machine
+has no open port at all for anyone on the local network.
 """
 
 from __future__ import annotations
@@ -36,11 +37,11 @@ class TailscaleStatus:
 
 
 def parse_status(status_json: str) -> TailscaleStatus:
-    """Tolk `tailscale status --json`. Ren funksjon."""
+    """Parse `tailscale status --json`. Pure function."""
     try:
         data = json.loads(status_json)
     except json.JSONDecodeError as exc:
-        raise TailscaleError(f"Kunne ikke tolke tailscale-status: {exc}") from exc
+        raise TailscaleError(f"Could not parse Tailscale status: {exc}") from exc
     self_node = data.get("Self") or {}
     return TailscaleStatus(
         installed=True,
@@ -60,16 +61,16 @@ def status(target: TargetHost) -> TailscaleStatus:
     probe = _run(target, "command -v tailscale >/dev/null && tailscale status --json || echo ''")
     if not probe.stdout.strip():
         return TailscaleStatus(
-            installed=False, backend_state="ikke installert", hostname="", addresses=[]
+            installed=False, backend_state="not installed", hostname="", addresses=[]
         )
     return parse_status(probe.stdout)
 
 
 def install(target: TargetHost) -> None:
-    """Installer Tailscale via deres offisielle script (legger til apt-repoet deres)."""
+    """Install Tailscale using their official script, which adds their apt repo."""
     result = _run(target, f"curl -fsSL {INSTALL_URL} | sudo sh", timeout=600)
     if not result.ok:
-        raise TailscaleError(f"Installasjon feilet: {result.stderr.strip()}")
+        raise TailscaleError(f"Installation failed: {result.stderr.strip()}")
 
 
 def up(
@@ -78,9 +79,11 @@ def up(
     authkey: str,
     hostname: str = "",
 ) -> TailscaleStatus:
-    """Meld boksen inn i tailnetet. Auth-nøkkelen går på stdin, aldri i argv."""
+    """Join the tailnet. The auth key goes on stdin, never in argv."""
     if not authkey:
-        raise TailscaleError("TS_AUTHKEY er ikke satt — lag en nøkkel i Tailscale admin → Keys.")
+        raise TailscaleError(
+            "TS_AUTHKEY is not set — create one in the Tailscale admin console under Keys."
+        )
 
     args = ["--ssh=false", "--accept-dns=false"]
     if hostname:
@@ -88,17 +91,17 @@ def up(
     if cfg.tailscale.login_server:
         args.append(f"--login-server={cfg.tailscale.login_server}")
 
-    # Nøkkelen leses fra stdin av shellet på targetet, så den havner ikke i
-    # prosesslista (der enhver lokal bruker kunne sett den med `ps`).
+    # The shell on the target reads the key from stdin, so it never appears in
+    # the process list where any local user could read it with `ps`.
     command = f'read -r KEY; sudo tailscale up --authkey="$KEY" {" ".join(args)}'
     result = _run(target, command, timeout=180)
     if not result.ok:
-        raise TailscaleError(f"`tailscale up` feilet: {result.stderr.strip()}")
+        raise TailscaleError(f"`tailscale up` failed: {result.stderr.strip()}")
     return status(target)
 
 
-# UFW-regler som flytter SSH fra «hele LAN-et» til «kun tailnetet».
-# Rekkefølgen er kritisk: åpne på tailscale0 FØR den brede regelen fjernes.
+# UFW rules moving SSH from "the whole LAN" to "the tailnet only".
+# The order is critical: open on tailscale0 BEFORE removing the broad rule.
 HARDEN_SCRIPT = f"""\
 set -eu
 ufw allow in on {INTERFACE} to any port 22 proto tcp
@@ -110,13 +113,13 @@ ufw reload
 
 
 def harden(target: TargetHost) -> None:
-    """Steng SSH mot LAN. Krever at Tailscale allerede er oppe — ellers låser vi oss ute."""
+    """Close SSH to the LAN. Requires Tailscale to be up, or we lock ourselves out."""
     current = status(target)
     if not current.is_up:
         raise TailscaleError(
-            f"Tailscale er ikke oppe (state: {current.backend_state}). "
-            "Nekter å stenge LAN-SSH før det finnes en annen vei inn — "
-            "kjør `pless tailscale up` først."
+            f"Tailscale is not up (state: {current.backend_state}). "
+            "Refusing to close LAN SSH before another way in exists — "
+            "run `pless tailscale up` first."
         )
     result = sshexec.run(
         target.user,
@@ -128,4 +131,4 @@ def harden(target: TargetHost) -> None:
         port=target.port,
     )
     if not result.ok:
-        raise TailscaleError(f"Brannmur-innstramming feilet: {result.stderr.strip()}")
+        raise TailscaleError(f"Firewall hardening failed: {result.stderr.strip()}")

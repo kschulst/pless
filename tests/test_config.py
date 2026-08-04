@@ -18,7 +18,7 @@ def test_load_partial_toml_keeps_defaults(tmp_path: Path) -> None:
     cfg = load_config(config_file)
 
     assert cfg.hetzner.server_name == "test-01"
-    assert cfg.hetzner.location == "hel1"  # default beholdes
+    assert cfg.hetzner.location == "hel1"  # default is kept
     assert cfg.paperless.ocr_languages == "nor+eng"
 
 

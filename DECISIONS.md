@@ -1,90 +1,180 @@
-# Beslutningslogg
+# Decision log
 
-Fra grilling-sesjon 2026-07-17. Endres kun med ny, eksplisitt beslutning.
+Why `pless` is built the way it is. Each entry records a decision and the reasoning
+behind it, so that a future contributor can tell a deliberate choice from an accident —
+and knows what would have to change for the decision to be revisited.
 
-| # | Tema | Beslutning | Begrunnelse |
-|---|------|-----------|-------------|
-| 1 | Scope | Hybrid: cloud-init eier engangsprovisjonering (hardening, Docker, UFW, fail2ban, Tailscale); `pless` eier alt som kjøres gjentatte ganger | Målet er arkivet, ikke CLI-et. Minst kode der bugs koster mest; idempotens gratis via deklarativ cloud-init |
-| 2 | Ingestion | Paperless REST API (`POST /api/documents/post_document/`) over Tailscale for lokal opplasting | Task-ID per fil gir upload-status, duplikatavvisning og konsumpsjonsbekreftelse gratis — erstatter hjemmelaget manifest/resume-logikk |
-| 3 | Eksponering | Kun Tailscale. Paperless på localhost, `tailscale serve` gir HTTPS på tailnet. Ingen Caddy, ingen åpne 80/443 | Vitnemål/fakturaer er identitetstyveri-gull; login-side skal ikke stå på internett. Mobiltilgang via Tailscale-appen |
-| 4 | Server | CX23 (2 vCPU/4 GB/40 GB NVMe), hel1, Ubuntu 24.04 | Datavolum < 5 GB → ~20 GB fullt utbygd inkl. eksportkopi. Verifisert mot Hetzner juli 2026; pris sjekkes i console ved opprettelse |
-| 5 | Dropbox | Fase 2. Modell: `paperless-inbox/` i Dropbox → rclone på server → consume → flytt til `paperless-inbox/processed/` etter vellykket ingestion | Naiv rclone-speiling re-laster evig fordi Paperless sletter konsumerte filer; tilstand må være eksplisitt, og synlig tilstand i Dropbox er ryddigst |
-| 6 | Backup | To lag: (a) `document_exporter` → `/opt/paperless/backups` → lastes ned lokalt; (b) restic → Backblaze B2, kryptert | B2 = annen leverandør enn Hetzner → overlever «kontoen låses». Exporterens layout (originalfiler + `manifest.json`) gjør «bare dokumentene» trivielt å skille ut |
-| 7 | Secrets | Bitwarden er source of truth; `.env` er lokal cache som kan gjenskapes. Restic-passphrase MÅ i Bitwarden | Overlever tap av både laptop og server |
-| 8 | Evernote | Blandet/ukjent format. `pless docs scan` klassifiserer; `.enex`/`.html` flagges som «trenger konvertering» — konverteringssteg scopes etter første skann | Paperless konsumerer ikke `.enex`; vi vet ikke ennå hvor mye som faktisk er ENEX |
-| 9 | SSH-bibliotek | subprocess + system-`ssh`, ikke paramiko/fabric | Gjenbruker agent, `~/.ssh/config`, known_hosts, ProxyJump uten reimplementering. Kjedelig og pålitelig |
-| 10 | Rekkefølge | V1: server + Paperless + engangsimport + backup. Fase 2: Dropbox-sync. | Brukbart arkiv tidligst mulig; sync skal ikke blokkere |
+Decisions are append-only. When one supersedes another, the older entry stays and is
+marked.
 
-## Pivot 2026-07-17: Raspberry Pi som primærtarget
+---
 
-Kenneth pivoterte samme dag: billigst mulig drift, egen maskinvare. Ny grilling.
-Beslutning #1–3 og #5–10 står; #4 (Hetzner-server) demoteres til sekundærtarget.
+## Architecture
 
-| # | Tema | Beslutning | Begrunnelse |
-|---|------|-----------|-------------|
-| 11 | Target-modell | Multi-target i samme repo: `target = "pi" \| "hetzner"`. Pi er primær; Hetzner beholdes som opsjon (bl.a. for deling med folk uten Pi) | Fase 1 er allerede target-agnostisk (API-ingestion, subprocess-SSH); kun provisjonering er target-spesifikk |
-| 12 | Maskinvare | Raspberry Pi 5 (bestilles, 4 GB minimum) er primær; Pi 4 (4/8 GB) skal også støttes (eneste reelle forskjell: LUKS-cipher, se #14). Dedikert til Paperless, fersk flash | 4 GB kjører full stack inkl. Tika/Gotenberg. Pi 5 har ARM crypto extensions (AES i full fart) og 2–3× raskere OCR. Paperless-ngx ≥ 2.0 er arm64-only — Pi ≤ 2 er dødt løp, Pi 3 (1 GB) frarådet |
-| 13 | Lagringsmedium | SD-kort til OS, USB-minnepinne til LUKS-datapartisjonen — separate medier. Migrering til SSD (ligger klar) via UUID-mount når pinnen dør | Separasjon: OS-korrupsjon tar ikke data og omvendt. Designet ANTAR at pinnen dør: mount via `/dev/mapper/paperless-data`, aldri devicenavn |
-| 14 | Kryptering | LUKS2 på datapartisjonen. Cipher autodetekteres: Adiantum på Pi ≤ 4 (Broadcom mangler ARM crypto extensions), AES-XTS på Pi 5/x86. Tang-klart ekstra keyslot fra dag én | Tyverikrav: stjålet Pi/medie skal være uleselig. Adiantum er Googles cipher for CPU-er uten AES-instruksjoner |
-| 15 | Opplåsing | `pless unlock`: ukryptert rot-OS, passphrase (fra Bitwarden) tastes over SSH etter boot, systemd-gating hindrer Docker-start mot umontert disk. Tang/clevis-auto-opplåsing er designklar fase-senere | Ingen initramfs-kompleksitet; ærlig trusselmodell (tyv får OS + tailscale-identitet som revokeres, null dokumenter). Nøkkel kan aldri bo på enheten |
-| 16 | Oppdatering | Full auto inkl. reboot (unattended-upgrades). Konsekvens akseptert: arkivet står låst etter kernel-reboots til `pless unlock` kjøres — estimert 1–3 ganger/mnd | Patch-hygiene vinner. Blir låsingene irriterende, flyttes Tang (#15) frem |
-| 17 | Varsling | Dead-man-varsling (healthchecks.io-mønster, konfigurerbart): «Pi oppe men låst» og «backup ikke kjørt» | Uten varsling oppdages strømbrudd/låsing først når man trenger et dokument |
-| 18 | Provisjonering | Deklarativ host-spec adskilt fra mekanisme: cloud-init for targets som støtter det (Hetzner, Ubuntu Server på Pi), SSH-bootstrap som fallback. Default Pi-OS: Ubuntu Server 24.04 arm64 | Kenneths pushback: ikke lås targets til samme mekanisme. Spec-en er felles, adapterne per target |
-| 19 | Backup-rolle | Restic → B2 blir PRIMÆRT katastrofelag (daglig, systemd-timer); exporter + lokal nedlasting ukentlig. B2 gratis-tier (10 GB) dekker < 5 GB-arkivet | Hjemmemaskinvare: tyveri/brann/mediedød tar gjerne Pi + disk samtidig. Restic er allerede kryptert → skybackup oppfyller tyverikravet |
-| 20 | Delbart image | Fase-senere, bygges PÅ multi-target-grunnlaget: først repo + guidet `pless init`-veiviser; ekte flashbart image (pi-gen) kun som bevisst beslutning siden det gjør oss til distro-vedlikeholdere | «Del ut til andre»-ambisjonen skal ikke koste arkitektur nå |
-| 21 | Dev-target | `target = "vm"`: lokal Ubuntu Server-VM via Multipass (arm64 på Apple Silicon — samme arkitektur og images som Pi-en), provisjonert med samme cloud-init-template. Hele løypa unntatt fysisk maskinvare testes her mens Pi-en er i posten | Multipass har innebygd cloud-init-støtte og validerer #18 direkte; `vm` blir også permanent test-target |
+**1. Scope: declarative provisioning, imperative operations.**
+Cloud-init or a bootstrap script handles one-time provisioning (hardening, Docker, firewall);
+the CLI owns everything that runs repeatedly (deploy, backup, health, unlock). Idempotency
+comes free from the declarative half, and the imperative half is where bugs would cost most.
 
-## Maskinvare ankommet 2026-08-01: Pi 5 8 GB + NVMe
+**2. Ingestion through the Paperless REST API, not the consume folder.**
+The API returns a task ID per file, so upload status, duplicate rejection and consumption
+confirmation come from Paperless itself. A consume-folder approach would mean
+re-implementing all three by watching files disappear.
 
-Kenneth kjøpte Pi 5 8 GB med Argon NEO 5-kabinett og NVMe-disk — ingen SD-kort.
-Det endrer #12/#13 (som forutsatte SD + separat minnepinne).
+**11. Multi-target from one codebase.**
+`target.type` selects Raspberry Pi, local VM or Hetzner Cloud. Everything downstream of
+"a host reachable over SSH" is target-agnostic, so adding a provider is roughly a hundred
+lines and touches nothing else.
 
-| # | Tema | Beslutning | Begrunnelse |
-|---|------|-----------|-------------|
-| 22 | Maskinvare (erstatter #12) | **Krav:** Pi 4 eller 5, arm64, ≥ 4 GB RAM, ett vilkårlig boot-medium. **Ikke krav:** NVMe, HAT eller spesifikt kabinett — takket være #25 er mediumtypen likegyldig for verktøyet. Kenneths oppsett: Pi 5 8 GB, Argon NEO 5, NVMe, uten SD-kort | Pi 5 har ARM crypto extensions → AES-XTS i full fart (verifisert av autodetekten i #14); Pi 4 faller tilbake på Adiantum. NVMe/SSD anbefales fremfor microSD fordi Postgres sliter ut kort, men er ikke påkrevd. Vifter på Pi 5s 4-pins-header styres av firmware, så leverandørscript (RPi-OS-only) trengs ikke. Minimum-kravene holdes bevisst lave for delbarhet (#20) |
-| 23 | OS | Ubuntu Server 24.04 LTS arm64, IKKE Raspberry Pi OS Lite | Identisk OS, arkitektur og container-images som dev-VM-en hele stacken er E2E-testet på. RPi OS ville krevd revalidering uten gevinst |
-| 24 | Flash-metode | Network Install (Shift under oppstart) skriver Ubuntu Server rett til NVMe. Ingen SD-kort, ingen demontering, ingen rpiboot. Krever skjerm + USB-tastatur + kablet nett | Kenneth har utstyret. Alternativene (M.2-USB-adapter, rpiboot) krever henholdsvis å åpne kabinettet eller nytt verktøy |
-| 25 | Datalagring (erstatter #13) | LUKS-fil (sparse, default 200 GB) på rotfilsystemet via loop-device — samme kodevei som vm-target. `data_mode = "partition"` finnes for egen blokk-enhet. Bieffekt: verktøyet blir uavhengig av lagringsmedium (NVMe/USB/microSD), noe som senker terskelen for #20 | Ubuntu auto-grower root til hele disken ved første boot, så det finnes ingen ledig plass å partisjonere, og ext4 kan ikke krympes montert. En fast-størrelse LUKS-fil gir samme isolasjon som en partisjon: dataene kan ikke spise OS-partisjonen. #13s to-medier-prinsipp faller uansett bort med én disk — og en USB-pinne er MINDRE pålitelig enn NVMe, så «beskyttelse» den veien var feil retning. Restic→B2 (#19) er fortsatt primært katastrofelag |
-| 26 | Bootstrap-mekanisme | `pless bootstrap` applikerer host-spec over SSH (`sudo sh -s`, script på stdin). Cloud-init-veien beholdes for vm/hetzner | Network Install booter Pi-en før vi noensinne ser boot-partisjonen. #18 forutså nøyaktig dette: felles spec, adapter per target. Samme konstanter (PACKAGES, SSHD_HARDENING, auto-reboot) genererer begge |
+**18. Host spec separated from delivery mechanism.**
+One specification, two renderers: cloud-init user-data for targets that support it, and an
+idempotent shell script over SSH for those that do not. Constants are shared, so the two
+cannot drift apart.
 
-## 2026-08-02: OS-grilling, LAN-trusselmodell og produktmål
+**35. The CLI is a library with a terminal front-end.**
+Core modules (`storage`, `deploy`, `bootstrap`, `docscan`, `audit`, `tailscale`) import
+neither `typer` nor `rich` and return dataclasses. `cli.py` is the only presentation layer.
+This is what lets a web interface drive the same code rather than reimplementing it.
 
-| # | Tema | Beslutning | Begrunnelse |
-|---|------|-----------|-------------|
-| 27 | OS (reviderer #23) | Debian 13 og Ubuntu 24.04+ **likestilt** — begge valideres. Anbefaling ved installasjon på Raspberry Pi: RPi OS (Trixie), fordi Pi Foundations kernel fikser Pi-maskinvarefeil først | Grillingen avdekket at Ubuntu 24.04 har dokumenterte kernel panics og PCIe-enumereringsfeil på Pi 5 + NVMe, fikset i RaspOS-kernel 6.6.y før Ubuntu. Samtidig falt hovedargumentet mot RPi OS bort: Bookworm manglet `docker-compose-v2` i apt, men Trixie (Debian 13, siden okt. 2025) har den under samme navn som Ubuntu — host-spec-en kjører uendret på begge |
-| 28 | Debian 13 som minimum | Debian 12 avvises av bootstrap | Bookworm mangler `docker-compose-v2`; å støtte den ville krevd Dockers eget apt-repo og en tredjepart til i tillitskjeden |
-| 29 | Dev-backends (utvider #21) | To VM-backends som speiler hver sin produksjonsløype: `lima` → Debian 13 + SSH-bootstrap (som Pi), `multipass` → Ubuntu + cloud-init (som Hetzner) | «Likestill»-kravet krever at begge distroer OG begge provisjoneringsmekanismer faktisk kjøres. Lima har `debian-13`-template og installeres uten sudo |
-| 30 | LAN-trusselmodell | Angriper antas å ha tilgang til det lokale nettet (kompromittert wifi, IoT-enhet, gjest). Målet er **null åpne porter** sett fra LAN: Paperless på 127.0.0.1, og SSH kun på `tailscale0` etter `pless harden` | Kenneths krav: nettverkstilgang skal ikke gi tilgang til dokumentene. Revisjon viste at Paperless allerede var tett, men SSH sto åpent mot hele nettet — og Tailscale var aldri implementert |
-| 31 | Innstramming er et eget steg | `pless harden --confirm` kjøres ETTER at `pless tailscale up` er verifisert oppe; harden nekter å kjøre hvis Tailscale ikke svarer | Å stenge LAN-SSH uten en verifisert alternativ vei inn er utelåsing. Recovery hvis alt ryker: skjerm og tastatur fysisk på maskinen |
-| 32 | `pless audit` | Verifiserer lyttende sockets, UFW-policy, Docker-publiserte porter, SSH-konfig og at data ligger på LUKS. Exit ≠ 0 ved avvik | Særlig for Docker/UFW-fella: Docker skriver egne iptables-regler forbi UFW, så en port publisert uten `127.0.0.1:`-prefiks blir LAN-synlig selv om UFW sier deny. Uten en sjekk som feiler, oppdages slikt aldri |
-| 33 | Tailnet-valg | Boksen blir med i ett tailnet, valgt av `TS_AUTHKEY`. `[tailscale] login_server` støtter selvhostet Headscale | Tailscale tillater flere tailnets per konto, men bare ett aktivt per enhet. Nøkkelen er allerede tailnet-spesifikk, så `pless` trenger ingen egen tailnet-parameter |
-| 34 | Produktmål | `pless` skal bli et produkt som promoteres på egen nettside og kan installeres av andre. Navnet `pless` er ledig på PyPI (verifisert 2026-08-02) | Hever #20 fra «senere» til førsteklasses mål. Påvirker: lave maskinvarekrav (#22), begge distroer (#27), og web-klargjøring (#35) |
-| 35 | Web-klargjøring | Kjernemodulene (`storage`, `deploy`, `bootstrap`, `docscan`, `audit`, `tailscale`) importerer verken `typer` eller `rich` og returnerer dataklasser; `cli.py` er eneste presentasjonslag. Nye kommandoer får `--json`, og alt som spør om hemmeligheter må ha en ikke-interaktiv vei | Et web-grensesnitt skal kunne drive CLI-et under panseret. Seamen fantes allerede — den er nå et krav, ikke en tilfeldighet |
+---
 
-| 36 | Docker-pakker per distro | `hostspec.packages_for()` gaffler: Debian → `docker-cli` + `docker-compose`, Ubuntu → `docker-compose-v2`. Verifisert empirisk, ikke fra dokumentasjon | Nettsøk påsto at `docker-compose-v2` fantes i Debian 13 — det gjør den ikke; Compose v2 heter der `docker-compose` (v2.26.1). Debian skiller dessuten klienten ut i `docker-cli`, som kun er en Recommends, og vi bruker `--no-install-recommends`. Begge feilene ga en tilsynelatende vellykket bootstrap med daemon uten `docker`-kommando |
-| 37 | Vent på apt-låsen | Bootstrap venter på `cloud-init status --wait` og setter `DPkg::Lock::Timeout=300` | En fersk maskin kjører cloud-init eller unattended-upgrades ved første boot. Uten dette feiler bootstrap med «Could not get lock» — og det ville truffet Pi-en like hardt som VM-en |
+## Security
 
-## 2026-08-04: Dokumentasjon, publisering og produktretning
+**3. Access through Tailscale only.**
+No public ports, no domain required, no login page exposed to the internet. A personal
+document archive holds identity documents and financial records; the attack surface should
+be zero, not merely small.
 
-| # | Tema | Beslutning | Begrunnelse |
-|---|------|-----------|-------------|
-| 38 | Docs-verktøy | Zensical | Material for MkDocs går EOL 5. november 2026, og Zensical er samme teams etterfølger. Det «utbredte» valget er annonsert dødt — å velge det ville betydd migrering innen tre måneder. Python-basert, som resten av prosjektet |
-| 39 | Docs-språk | **Engelsk** på nettsiden; `DECISIONS.md` forblir norsk som internt arbeidsdokument | Målgruppen for et selvhostet Paperless-oppsett er global, og hele økosystemet rundt (Paperless, Tailscale, Docker) er engelsk. Tospråklig ble vurdert og forkastet: én av versjonene råtner alltid |
-| 40 | Publisering | Offentlig repo `kschulst/pless` fra dag én, med ærlig alfa-merking og en statustabell som skiller det som virker fra det som ikke finnes | Åpenhet om umodenhet koster ingenting; å dokumentere funksjoner som ikke finnes koster tillit. Reponavn = kommandonavn = PyPI-navn |
-| 41 | Én kilde per ting | `docs/pi-oppsett.md` absorbert av installasjonskapittelet, README krympet til pitch + lenke | Duplisert dokumentasjon kommer alltid i utakt |
-| 42 | Lisens | MIT | Vanligste valget for et CLI-verktøy; lavest friksjon for gjenbruk |
-| 43 | Restore-øvelser | `pless backup verify` skal gjøre en EKTE gjenoppretting til et scratch-område og inspisere resultatet — ikke bare bekrefte at en arkivfil finnes. Leveres SAMMEN med backup, ikke etterpå | En backup som aldri er gjenopprettet er en tro, ikke en backup |
-| 44 | Web-wizard | Planlagt: web-grensesnitt for oppsett som driver CLI-et / et felles API under panseret. Forsterker #35 — kjernemodulene forblir fri for typer/rich, og alt som spør om hemmeligheter må ha en ikke-interaktiv vei | Senker terskelen for at andre kommer i gang, som er hele poenget med #34 |
-| 45 | Åpen kildekode | Målet er et selvstendig opensource-produkt. CI (ruff + pytest) kjører på hver push | Følger av #34 og #40 |
+**14. LUKS2 with automatic cipher selection.**
+AES-XTS where the CPU has AES instructions, Adiantum otherwise. The Raspberry Pi 4's
+Broadcom SoC lacks ARM crypto extensions, which would make AES painfully slow; Adiantum is
+Google's answer to exactly that problem. Detection reads `/proc/cpuinfo`, so no user
+configuration is involved.
 
-## Åpne punkter
+**15. Manual unlock after boot.**
+The root filesystem is unencrypted; only the data volume is encrypted, and its key never
+touches the machine. The consequence is accepted deliberately: after every reboot the
+archive stays locked until someone supplies the passphrase. A stolen machine yields
+hardware and an OS, not documents.
 
-- **CLI-et snakker fortsatt norsk** mens dokumentasjonen er engelsk. Docs viser engelsk konsolloutput som ikke stemmer med virkeligheten. Må oversettes før prosjektet deles bredt — se #39/#40.
-- **Neste store steg: installere på Kenneths Pi 5.** Krever at han er til stede (flashing med skjerm/tastatur). Guide: `docs/installation/raspberry-pi.md`.
-- Import- og backup-fasene er ikke bygget ennå — arkivet finnes ikke før de er det.
-- `TS_AUTHKEY` mangler, så `pless tailscale up` og `pless harden` er ikke live-testet; koden er enhetstestet.
-- Konverteringspipeline for `.enex` — venter på resultat av `pless docs scan` mot ekte data.
-- Eksakt Pi-modell/RAM bekreftes med `cat /proc/device-tree/model` og `free -h` før bootstrap.
-- Varslingskanal (healthchecks.io vs ntfy vs e-post) — mønsteret er dead-man-ping; kanal velges ved implementasjon.
-- Tang-server-plassering (router/NAS/annen Pi) — avklares først når auto-opplåsing faktisk prioriteres.
-- Hetzner-sporet: CX23-pris verifiseres i konsollen før evt. `server create`; Hetzner auto-backup ble ikke valgt (restic+exporter dekker behovet).
+**30. The local network is treated as hostile.**
+The threat model assumes an attacker already has LAN access — a guest device, an unpatched
+IoT appliance, a compromised phone. After `pless harden`, nothing listens on the LAN at
+all: Paperless binds to localhost, the database publishes no ports, and SSH accepts
+connections only over `tailscale0`.
+
+**31. Hardening is a separate, guarded step.**
+`pless harden` refuses to run until Tailscale is verified working. Closing LAN SSH without
+a confirmed alternative route in is a lockout, and the only recovery is physical access.
+
+**32. Exposure is verified mechanically, not assumed.**
+`pless audit` checks listening sockets, firewall policy, published container ports, SSH
+configuration and storage encryption, and exits non-zero on findings. It exists chiefly
+because **Docker writes its own iptables rules that bypass UFW** — a port published without
+a `127.0.0.1:` prefix becomes LAN-visible while the firewall still reports deny. That
+failure is completely silent, so only an explicit check catches it.
+
+**Secrets never travel in argv.**
+Passphrases and auth keys are passed to the target on stdin. Anything in `argv` is readable
+by any local user through `ps`, and often lands in shell history and process accounting.
+
+---
+
+## Platform
+
+**22. Hardware requirements are deliberately low.**
+Required: a Raspberry Pi 4 or 5 (or any x86-64 machine), 64-bit, at least 4 GB of RAM, and
+any boot medium. Not required: NVMe, a specific HAT, or a particular case. Paperless-ngx 2.x
+is not built for 32-bit ARM, which is the one hard exclusion.
+
+**25. Data lives in an encrypted file, not a partition.** *(supersedes an earlier
+two-media design)*
+Both Ubuntu and Raspberry Pi OS grow the root partition to fill the disk on first boot,
+leaving no free space to partition, and ext4 cannot be shrunk while mounted. A fixed-size
+LUKS file gives the same isolation a partition would — the archive cannot grow into the
+operating system's space — and makes the tool indifferent to the storage medium.
+
+**27. Debian and Ubuntu are equals.**
+Both are validated. On Raspberry Pi hardware, Raspberry Pi OS is *recommended*, because the
+Raspberry Pi Foundation's kernel receives fixes for Pi-specific hardware first; NVMe and
+PCIe bugs on the Pi 5 were fixed there before they reached Ubuntu's kernel.
+
+**28. Debian 13 is the minimum.**
+Debian 12 lacks Compose v2 in apt, and supporting it would mean adding Docker's own
+repository — another party in the trust chain for no benefit.
+
+**36. Docker package names differ per distribution, and this was found by running it.**
+Debian 13 ships Compose v2 as `docker-compose` (there is no `docker-compose-v2`) and splits
+the client into `docker-cli`, which is only a *Recommends* — so with
+`--no-install-recommends` you get a daemon with no client. Ubuntu is the mirror image.
+Documentation claimed otherwise; only execution on real machines revealed it.
+
+**37. Bootstrap waits for the apt lock.**
+A freshly installed machine runs cloud-init or unattended-upgrades on first boot. Without
+waiting for `cloud-init status --wait` and setting `DPkg::Lock::Timeout`, bootstrap fails
+with "Could not get lock" on exactly the machines it is meant to set up.
+
+---
+
+## Operations
+
+**16. Automatic security updates, including reboots.**
+`unattended-upgrades` installs patches and reboots at 04:30 when the kernel changes. The
+cost is accepted: the archive is locked afterwards until someone unlocks it, roughly once or
+twice a month. Patch hygiene wins over convenience.
+
+**19. Off-site backup is the primary disaster layer.**
+Encrypted restic snapshots to object storage at a *different provider* from wherever the
+machine runs, plus Paperless's own exporter pulled down locally. Home hardware is lost to
+theft, fire or media failure as a unit; a backup sharing a blast radius with what it
+protects is not a backup.
+
+**43. Restore drills ship with backup, not after it.**
+`pless backup verify` will perform a real restore into a scratch location and inspect the
+result, rather than confirming that an archive file exists. A backup that has never been
+restored is a belief.
+
+---
+
+## Project
+
+**34 / 45. This is an open-source product.**
+Documentation, code and user-facing output are in English. Requirements are kept low and
+both supported distributions are tested, because the goal is that someone other than the
+author can install it. CI runs lint and tests on every push.
+
+**38. Zensical for documentation.**
+Material for MkDocs reaches end of life on 5 November 2026, and Zensical is the same team's
+successor. Choosing the more widespread tool would have meant migrating within months.
+
+**41. One source per fact.**
+Installation instructions live in the documentation site; the README is a pitch and a link.
+Duplicated documentation always drifts.
+
+**Documentation drift is caught mechanically.**
+`tests/test_docs_consistency.py` fails when a command exists but is undocumented, when the
+docs describe a command that no longer exists, when a config section is missing from the
+reference, when an internal link is broken, or when a page is missing from the navigation.
+A convention decays; a failing build does not.
+
+**42. MIT licence.**
+
+---
+
+## Open questions
+
+- **Import is not built.** Without it there is no archive. Planned through the Paperless
+  REST API (see decision 2).
+- **Backup is not built.** Planned as decisions 19 and 43 describe.
+- **Alternative unlock methods.** Manual `pless unlock` is the only route today. Clevis and
+  Tang would let the machine unlock itself at home while staying sealed elsewhere; a
+  phone-based approach is also worth exploring. The LUKS volume is created with a spare key
+  slot so either can be added without re-encrypting.
+- **Password-manager integration.** Writing generated secrets straight into a password
+  manager through its CLI, where one is available, would remove the most error-prone manual
+  step in setup.
+- **Web setup wizard.** A browser-based installer driving the same core modules as the CLI.
+  Decision 35 keeps that possible; the interface itself is unbuilt.
+- **Raspberry Pi validation.** The Pi path is documented and the code paths are exercised on
+  Debian, but no run on real Pi hardware has been completed yet.
+- **Hetzner validation.** Code and unit tests exist; no live run against the API.

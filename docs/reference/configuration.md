@@ -46,6 +46,41 @@ the root partition to fill the disk on first boot, which leaves no free space to
 and a fixed-size encrypted file gives the same isolation a partition would, since the data
 cannot grow into the operating system's space.
 
+#### Sizing `data_size_gb` {#sizing}
+
+The file is sparse, so unused space costs nothing on disk. The temptation is therefore to
+set it to nearly the whole disk. Resist that.
+
+The file lives on the root filesystem, so a full archive means a full operating system:
+Docker stops working, logging fails, and — worst — the ext4 filesystem *inside* the LUKS
+volume starts getting I/O errors on write. That is a nastier failure than an ordinary full
+disk, because the corruption happens a layer down.
+
+The rule is that **even a completely full archive must leave the OS room to breathe**:
+
+```
+data_size_gb  ≤  disk size − 15 GB (OS and container images) − 20 GB margin
+```
+
+| Disk | Sensible ceiling | Reasonable starting point |
+|---|---|---|
+| 128 GB | ~90 | 50 |
+| 256 GB | ~220 | 100 |
+| 512 GB | ~470 | 100–200 |
+| 1 TB | ~965 | 200 |
+| 32 GB microSD | ~16 | 16 |
+
+To size it for your own collection rather than your disk: Paperless keeps the original *and*
+an OCR'd archive copy, so budget about 2.2×; local exports add roughly another 1.2×. A 5 GB
+collection therefore lands near 17 GB fully built out, and 50 GB gives it three times room
+to grow.
+
+**Start low.** Growing the volume is documented and undramatic — `truncate`,
+`cryptsetup resize`, `resize2fs`, all while mounted (see
+[Grow or move storage](../cookbook/storage.md)). Shrinking requires creating a new volume and
+copying everything across. The asymmetry points one way: pick a modest number and raise it
+when `pless server df` says so.
+
 With `data_mode = "partition"`, always use a `/dev/disk/by-id/...` path. Names like `/dev/sdb`
 are assigned in boot order and will eventually point somewhere you did not intend.
 
@@ -100,6 +135,18 @@ across a database migration at a moment you did not choose.
 
 `ocr_languages` takes [Tesseract language codes](https://tesseract-ocr.github.io/tessdoc/Data-Files-in-different-versions.html):
 `nor`, `eng`, `deu`, `swe`. More languages means slower OCR, so list only what you have.
+
+### `[paths]`
+
+```toml
+[paths]
+local_documents = "./documents"
+local_backups = "./backups"
+```
+
+Local directories on *your* machine, not the target. `local_documents` is the
+default location `pless docs` commands look at; `local_backups` is where downloaded
+backups will land once that feature exists.
 
 ### `[storage]`
 

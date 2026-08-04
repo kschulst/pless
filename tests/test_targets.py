@@ -16,15 +16,15 @@ def test_parses_ip_from_running_vm() -> None:
 
 
 def test_unknown_vm_raises() -> None:
-    with pytest.raises(TargetError, match="kjenner ikke"):
+    with pytest.raises(TargetError, match="does not know"):
         parse_multipass_ip(info_json(), "annen-vm")
 
 
 def test_stopped_vm_raises() -> None:
-    with pytest.raises(TargetError, match="ikke Running"):
+    with pytest.raises(TargetError, match="is not Running"):
         parse_multipass_ip(info_json(state="Stopped", ipv4=["10.0.0.1"]), "pless-dev")
 
 
 def test_running_without_ip_raises() -> None:
-    with pytest.raises(TargetError, match="ingen IPv4"):
+    with pytest.raises(TargetError, match="no IPv4"):
         parse_multipass_ip(info_json(ipv4=[]), "pless-dev")

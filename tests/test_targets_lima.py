@@ -11,13 +11,13 @@ def lima_line(name: str = "pless-dev", status: str = "Running", port: int = 6002
             "name": name,
             "status": status,
             "sshLocalPort": port,
-            "config": {"user": {"name": "kenneth"}},
+            "config": {"user": {"name": "deploy"}},
         }
     )
 
 
 def test_parses_user_and_port() -> None:
-    assert parse_lima_instance(lima_line(), "pless-dev") == ("kenneth", 60022)
+    assert parse_lima_instance(lima_line(), "pless-dev") == ("deploy", 60022)
 
 
 def test_finds_the_right_instance_among_several() -> None:
@@ -26,32 +26,32 @@ def test_finds_the_right_instance_among_several() -> None:
 
 
 def test_stopped_instance_raises() -> None:
-    with pytest.raises(TargetError, match="ikke Running"):
+    with pytest.raises(TargetError, match="is not Running"):
         parse_lima_instance(lima_line(status="Stopped"), "pless-dev")
 
 
 def test_unknown_instance_raises() -> None:
-    with pytest.raises(TargetError, match="kjenner ikke"):
+    with pytest.raises(TargetError, match="does not know"):
         parse_lima_instance(lima_line(), "finnes-ikke")
 
 
 def test_missing_port_raises() -> None:
-    with pytest.raises(TargetError, match="ingen SSH-port"):
+    with pytest.raises(TargetError, match="no SSH port"):
         parse_lima_instance(json.dumps({"name": "pless-dev", "status": "Running"}), "pless-dev")
 
 
 def test_non_json_lines_are_skipped() -> None:
-    # limactl kan skrive advarsler til stdout før JSON-en.
+    # limactl can print warnings to stdout before the JSON.
     assert parse_lima_instance(f"WARN noe skjedde\n{lima_line()}", "pless-dev")[1] == 60022
 
 
 def test_missing_tool_gives_explanation_not_traceback() -> None:
-    with pytest.raises(TargetError, match="finnes ikke i PATH"):
+    with pytest.raises(TargetError, match="was not found in PATH"):
         _run_tool(["dette-verktoyet-finnes-ikke", "--hjelp"])
 
 
 def test_missing_known_tool_includes_install_hint() -> None:
-    # Kan ikke kalle limactl her (kan være installert), så sjekk hint-tabellen direkte.
+    # We cannot call limactl here (it may be installed), so check the hint table.
     from pless.targets import _INSTALL_HINTS
 
     assert "brew install lima" in _INSTALL_HINTS["limactl"]

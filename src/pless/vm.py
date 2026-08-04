@@ -1,8 +1,8 @@
-"""Dev-VM-backends (beslutning #21, #30). Tynne, subprocess-baserte.
+"""Development VM backends. Thin wrappers around subprocess.
 
-To backends, som dekker hver sin produksjonsløype:
-  lima      → Debian 13, provisjoneres med `pless bootstrap` (speiler Pi/RPi OS)
-  multipass → Ubuntu, provisjoneres med cloud-init (speiler Hetzner)
+Two backends, each mirroring a production path:
+  lima      -> Debian 13, provisioned by `pless bootstrap` (like a Pi)
+  multipass -> Ubuntu, provisioned by cloud-init (like Hetzner)
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from pathlib import Path
 
 from pless import config
 
-UBUNTU_IMAGE = "24.04"
+# The current Ubuntu LTS. Older releases are still supported by bootstrap —
+# see SUPPORTED_DISTROS — but we test against what we recommend.
+UBUNTU_IMAGE = "26.04"
 LIMA_TEMPLATE = "template://debian-13"
 
 BACKENDS = ("lima", "multipass")
@@ -26,14 +28,11 @@ class VmError(RuntimeError):
 
 def require_backend(backend: str) -> None:
     if backend not in BACKENDS:
-        raise VmError(f"Ukjent vm.backend {backend!r} (gyldig: {', '.join(BACKENDS)}).")
+        raise VmError(f"Unknown vm.backend {backend!r} (valid: {', '.join(BACKENDS)}).")
     if backend == "lima" and shutil.which("limactl") is None:
-        raise VmError("lima er ikke installert. Kjør `brew install lima`.")
+        raise VmError("lima is not installed. Run `brew install lima`.")
     if backend == "multipass" and shutil.which("multipass") is None:
-        raise VmError(
-            "multipass er ikke installert. Kjør `! brew install --cask multipass --yes` "
-            "(krever sudo-passord interaktivt)."
-        )
+        raise VmError("multipass is not installed. Run `brew install --cask multipass`.")
 
 
 def require_multipass() -> None:
@@ -60,10 +59,11 @@ def exists(cfg: config.VmConfig) -> bool:
 
 
 def launch(cfg: config.VmConfig, user_data_path: Path | None = None) -> None:
-    """Opprett VM-en. Blokkerer til den er oppe — første gang lastes imaget ned.
+    """Create the VM, blocking until it is up. First run downloads an image.
 
-    lima får ingen cloud-init: den provisjoneres av `pless bootstrap` over SSH,
-    nøyaktig som Pi-en. multipass får host-spec som cloud-init, som Hetzner.
+    Lima gets no cloud-init: it is provisioned by `pless bootstrap` over SSH,
+    exactly as a Pi is. Multipass gets the host spec as cloud-init, as a cloud
+    server does.
     """
     if cfg.backend == "lima":
         completed = _lima(
@@ -78,11 +78,11 @@ def launch(cfg: config.VmConfig, user_data_path: Path | None = None) -> None:
             ]
         )
         if completed.returncode != 0:
-            raise VmError(f"limactl start feilet: {completed.stderr.strip()}")
+            raise VmError(f"limactl start failed: {completed.stderr.strip()}")
         return
 
     if user_data_path is None:
-        raise VmError("multipass-backenden krever cloud-init user-data.")
+        raise VmError("The multipass backend requires cloud-init user-data.")
     completed = _run(
         [
             "launch",
@@ -100,11 +100,11 @@ def launch(cfg: config.VmConfig, user_data_path: Path | None = None) -> None:
         ]
     )
     if completed.returncode != 0:
-        raise VmError(f"multipass launch feilet: {completed.stderr.strip()}")
+        raise VmError(f"multipass launch failed: {completed.stderr.strip()}")
 
 
 def info(cfg: config.VmConfig) -> dict:
-    """Normalisert status: {'state': str, 'addresses': list[str]}."""
+    """Normalised status: {'state': str, 'addresses': list[str]}."""
     if cfg.backend == "lima":
         completed = _lima(["list", "--format", "json"], timeout=30)
         for line in completed.stdout.strip().splitlines():
@@ -112,27 +112,27 @@ def info(cfg: config.VmConfig) -> dict:
             if data.get("name") == cfg.name:
                 port = data.get("sshLocalPort")
                 return {
-                    "state": data.get("status", "ukjent"),
+                    "state": data.get("status", "unknown"),
                     "addresses": [f"127.0.0.1:{port}"] if port else [],
                 }
-        raise VmError(f"Lima kjenner ikke VM-en {cfg.name!r}.")
+        raise VmError(f"Lima does not know a VM named {cfg.name!r}.")
 
     completed = _run(["info", cfg.name, "--format", "json"], timeout=30)
     if completed.returncode != 0:
-        raise VmError(f"multipass info feilet: {completed.stderr.strip()}")
+        raise VmError(f"multipass info failed: {completed.stderr.strip()}")
     data = json.loads(completed.stdout)["info"][cfg.name]
-    return {"state": data.get("state", "ukjent"), "addresses": data.get("ipv4") or []}
+    return {"state": data.get("state", "unknown"), "addresses": data.get("ipv4") or []}
 
 
 def delete(cfg: config.VmConfig) -> None:
     if cfg.backend == "lima":
         stop = _lima(["stop", "--force", cfg.name], timeout=120)
         if stop.returncode != 0 and "not running" not in stop.stderr.lower():
-            raise VmError(f"limactl stop feilet: {stop.stderr.strip()}")
+            raise VmError(f"limactl stop failed: {stop.stderr.strip()}")
         completed = _lima(["delete", "--force", cfg.name], timeout=120)
         if completed.returncode != 0:
-            raise VmError(f"limactl delete feilet: {completed.stderr.strip()}")
+            raise VmError(f"limactl delete failed: {completed.stderr.strip()}")
         return
     completed = _run(["delete", "--purge", cfg.name], timeout=120)
     if completed.returncode != 0:
-        raise VmError(f"multipass delete feilet: {completed.stderr.strip()}")
+        raise VmError(f"multipass delete failed: {completed.stderr.strip()}")

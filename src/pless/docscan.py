@@ -1,4 +1,4 @@
-"""Rekursiv skanning og klassifisering av lokale dokumenter før import."""
+"""Recursive scanning and classification of local documents before import."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Konsumeres direkte av Paperless-ngx (med Tika/Gotenberg aktivert for Office-formatene).
+# Consumed directly by Paperless-ngx, with Tika and Gotenberg handling Office formats.
 SUPPORTED_EXTS = {
     ".pdf",
     ".jpg",
@@ -30,7 +30,7 @@ SUPPORTED_EXTS = {
     ".eml",
 }
 
-# Krever konvertering før Paperless kan ta dem (typisk Evernote-eksport).
+# Need converting before Paperless can take them — typically an Evernote export.
 NEEDS_CONVERSION_EXTS = {".enex", ".html", ".htm"}
 
 SKIP_NAMES = {".DS_Store", "Thumbs.db", "desktop.ini", "Icon\r"}
@@ -64,7 +64,7 @@ class ScanResult:
         return len(self.supported) + len(self.needs_conversion) + len(self.unsupported)
 
     def duplicate_groups(self) -> dict[str, list[FileEntry]]:
-        """Grupper av supported-filer med identisk sha256 (krever with_hashes)."""
+        """Groups of supported files with identical sha256. Requires with_hashes."""
         by_hash: dict[str, list[FileEntry]] = {}
         for entry in self.supported:
             if entry.sha256:
@@ -85,13 +85,13 @@ def _sha256(path: Path) -> str:
 
 
 def scan(root: Path, with_hashes: bool = False) -> ScanResult:
-    """Skann root rekursivt. Skjulte filer/mapper og systemfiler hoppes over.
+    """Scan root recursively, skipping hidden and system files.
 
-    Sletter ingenting og følger ikke symlinker ut av treet.
+    Deletes nothing and does not follow symlinks out of the tree.
     """
     result = ScanResult(root=root)
     if not root.is_dir():
-        raise NotADirectoryError(f"Ikke en mappe: {root}")
+        raise NotADirectoryError(f"Not a directory: {root}")
 
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.is_symlink():
@@ -102,7 +102,7 @@ def scan(root: Path, with_hashes: bool = False) -> ScanResult:
 
         ext = path.suffix.lower()
         entry = FileEntry(path=path, size=path.stat().st_size)
-        result.by_extension[ext or "(uten endelse)"] += 1
+        result.by_extension[ext or "(no extension)"] += 1
 
         if ext in SUPPORTED_EXTS:
             if with_hashes:

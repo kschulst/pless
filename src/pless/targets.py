@@ -1,4 +1,4 @@
-"""Target-oppslag: alle targets ender som «en SSH-tilgjengelig host» (beslutning #11/#18)."""
+"""Target lookup: every target ends up as "a host reachable over SSH"."""
 
 from __future__ import annotations
 
@@ -25,24 +25,24 @@ class TargetHost:
 
 
 def parse_multipass_ip(info_json: str, name: str) -> str:
-    """Hent IPv4 fra `multipass info <name> --format json`. Ren funksjon, testbar."""
+    """Extract the IPv4 address from `multipass info <name> --format json`."""
     data = json.loads(info_json)
     info = data.get("info", {}).get(name)
     if info is None:
-        raise TargetError(f"Multipass kjenner ikke VM-en {name!r}.")
+        raise TargetError(f"Multipass does not know a VM named {name!r}.")
     if info.get("state") != "Running":
-        raise TargetError(f"VM-en {name!r} er ikke Running (state: {info.get('state')}).")
+        raise TargetError(f"VM {name!r} is not Running (state: {info.get('state')}).")
     ipv4 = info.get("ipv4") or []
     if not ipv4:
-        raise TargetError(f"VM-en {name!r} har ingen IPv4 ennå.")
+        raise TargetError(f"VM {name!r} has no IPv4 address yet.")
     return ipv4[0]
 
 
 def parse_lima_instance(list_json: str, name: str) -> tuple[str, int]:
-    """Hent (bruker, ssh-port) fra `limactl list --format json`.
+    """Extract (user, ssh port) from `limactl list --format json`.
 
-    Lima kjører VM-en bak port-forwarding på 127.0.0.1, ikke på egen IP.
-    Utdata er én JSON-linje per instans.
+    Lima runs its VMs behind port forwarding on 127.0.0.1 rather than giving
+    them an address of their own. Output is one JSON object per line.
     """
     for line in list_json.strip().splitlines():
         line = line.strip()
@@ -55,33 +55,31 @@ def parse_lima_instance(list_json: str, name: str) -> tuple[str, int]:
         if data.get("name") != name:
             continue
         if data.get("status") != "Running":
-            raise TargetError(
-                f"Lima-VM-en {name!r} er ikke Running (status: {data.get('status')})."
-            )
+            raise TargetError(f"Lima VM {name!r} is not Running (status: {data.get('status')}).")
         port = data.get("sshLocalPort")
         if not port:
-            raise TargetError(f"Lima-VM-en {name!r} har ingen SSH-port ennå.")
+            raise TargetError(f"Lima VM {name!r} has no SSH port yet.")
         return data.get("config", {}).get("user", {}).get("name") or getpass.getuser(), int(port)
-    raise TargetError(f"Lima kjenner ikke VM-en {name!r}.")
+    raise TargetError(f"Lima does not know a VM named {name!r}.")
 
 
 _INSTALL_HINTS = {
-    "limactl": "Installer med `brew install lima`.",
-    "multipass": "Installer med `! brew install --cask multipass --yes`.",
+    "limactl": "Install it with `brew install lima`.",
+    "multipass": "Install it with `brew install --cask multipass`.",
 }
 
 
 def _run_tool(args: list[str]) -> str:
-    """Kjør et eksternt verktøy og gi en forklaring — ikke en traceback — når det mangler."""
+    """Run an external tool, explaining rather than crashing when it is missing."""
     tool = args[0]
     try:
         completed = subprocess.run(args, capture_output=True, text=True)
     except FileNotFoundError as exc:
         hint = _INSTALL_HINTS.get(tool, "")
-        raise TargetError(f"{tool} finnes ikke i PATH. {hint}".strip()) from exc
+        raise TargetError(f"{tool} was not found in PATH. {hint}".strip()) from exc
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
-        raise TargetError(f"`{' '.join(args)}` feilet: {detail}")
+        raise TargetError(f"`{' '.join(args)}` failed: {detail}")
     return completed.stdout
 
 
@@ -90,7 +88,7 @@ def _lima_list() -> str:
 
 
 def lima_identity_file() -> Path:
-    """Lima genererer sin egen nøkkel; den virker alltid mot lima-VM-er."""
+    """Lima generates its own key, which always works against Lima VMs."""
     return Path.home() / ".lima" / "_config" / "user"
 
 
@@ -114,17 +112,17 @@ def resolve_target(cfg: config.Config, secrets: config.Secrets) -> TargetHost:
         return TargetHost(name=cfg.vm.name, user="ubuntu", host=ip, key=cfg.ssh.key)
     if target_type == "pi":
         if not cfg.pi.host:
-            raise TargetError("[pi] host er ikke satt i pless.toml.")
+            raise TargetError("[pi] host is not set in pless.toml.")
         return TargetHost(name="pi", user=cfg.pi.user, host=cfg.pi.host, key=cfg.ssh.key)
     if target_type == "hetzner":
         client = hetzner.make_client(secrets.hcloud_token)
         server = hetzner.get_server(client, cfg.hetzner.server_name)
         if server is None:
-            raise TargetError(f"Fant ingen Hetzner-server ved navn {cfg.hetzner.server_name!r}.")
+            raise TargetError(f"No Hetzner server named {cfg.hetzner.server_name!r} was found.")
         return TargetHost(
             name=server.name,
             user=cfg.ssh.user,
             host=hetzner.server_ip(server),
             key=cfg.ssh.key,
         )
-    raise TargetError(f"Ukjent target.type: {target_type!r} (gyldig: vm, pi, hetzner)")
+    raise TargetError(f"Unknown target.type: {target_type!r} (valid: vm, pi, hetzner)")

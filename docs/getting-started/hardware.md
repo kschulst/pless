@@ -35,6 +35,17 @@ This is what the documentation was written against:
 Expect somewhere around €120–160 for the lot, once. Compared to a year of cloud hosting,
 it pays for itself quickly — and nobody else's terms of service apply to it.
 
+## How much space do you need?
+
+Less than you might think. Paperless keeps the original file *and* an OCR'd archive copy, so
+budget roughly **2.2×** your collection; local exports add about another **1.2×**. A 5 GB
+collection of scans and PDFs therefore lands near 17 GB fully built out.
+
+That means a 256 GB NVMe is not "enough" — it is enormous. The number that matters is
+`data_size_gb`, which caps how large the encrypted volume may grow, and it should be set
+well below the disk size so a full archive can never starve the operating system. See
+[Sizing `data_size_gb`](../reference/configuration.md#sizing) for the arithmetic and a table.
+
 ## Choosing storage
 
 The tool works with all of these. The differences are lifespan and speed, not compatibility.

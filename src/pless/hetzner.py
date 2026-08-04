@@ -1,4 +1,4 @@
-"""Tynn wrapper rundt hcloud-SDK-et. Ingen forretningslogikk her."""
+"""A thin wrapper around the hcloud SDK. No business logic here."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ class TokenInfo:
 
 def make_client(token: str) -> Client:
     if not token:
-        raise ValueError("HCLOUD_TOKEN er ikke satt — legg det i .env (og Bitwarden).")
+        raise ValueError("HCLOUD_TOKEN is not set — put it in .env and in your password manager.")
     return Client(token=token)
 
 
 def check_token(client: Client) -> TokenInfo:
-    """Verifiser tokenet med reelle, harmløse read-kall."""
+    """Verify the token with real but harmless read-only calls."""
     servers = client.servers.get_all()
     locations = client.locations.get_all()
     return TokenInfo(
@@ -39,4 +39,4 @@ def get_server(client: Client, name: str) -> Server | None:
 def server_ip(server: Server) -> str:
     if server.public_net and server.public_net.ipv4:
         return server.public_net.ipv4.ip
-    raise RuntimeError(f"Serveren {server.name} har ingen offentlig IPv4.")
+    raise RuntimeError(f"Server {server.name} has no public IPv4 address.")

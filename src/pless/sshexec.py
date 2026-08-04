@@ -1,8 +1,8 @@
-"""SSH via subprocess + system-ssh.
+"""SSH via subprocess and the system ssh binary.
 
-Valgt fremfor paramiko/fabric: system-ssh gjenbruker ssh-agent, ~/.ssh/config,
-known_hosts og eventuelle ProxyJump/multiplexing-oppsett uten at vi
-reimplementerer noe av det. Kjedelig og pålitelig.
+Chosen over paramiko/fabric because the system ssh already reuses ssh-agent,
+~/.ssh/config, known_hosts and any ProxyJump or multiplexing setup, none of
+which we then have to reimplement. Boring and reliable.
 """
 
 from __future__ import annotations
@@ -50,8 +50,11 @@ def run(
     input_text: str | None = None,
     port: int = 22,
 ) -> SshResult:
-    """Kjør kommando over SSH. `input_text` sendes på stdin — brukes for
-    passphrases (aldri i argv, aldri i loggbar kommandostreng)."""
+    """Run a command over SSH.
+
+    `input_text` is sent on stdin, which is how secrets are passed: never in
+    argv, where any local user could read them with `ps`.
+    """
     completed = subprocess.run(
         ssh_command(user, host, key, remote_command, port),
         capture_output=True,

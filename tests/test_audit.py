@@ -1,5 +1,5 @@
-"""Trusselmodell: angriper har allerede LAN-tilgang (wifi, IoT, gjest).
-De skal ikke finne en tjeneste å angripe eller få ut dokumenter."""
+"""Threat model: the attacker already has LAN access (Wi-Fi, IoT, a guest).
+They must find no service to attack and no way to extract documents."""
 
 from pless.audit import (
     Severity,
@@ -45,7 +45,7 @@ class TestListeningSockets:
         assert check_listening_sockets([]).ok
 
     def test_known_ports_are_named_in_the_finding(self) -> None:
-        # Et portnummer alene sier lite om hva som må fikses.
+        # A bare port number says little about what needs fixing.
         finding = check_listening_sockets(
             [
                 "LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
@@ -56,9 +56,13 @@ class TestListeningSockets:
         assert "(LLMNR)" in finding.detail
 
     def test_unknown_port_is_shown_without_a_guessed_name(self) -> None:
-        finding = check_listening_sockets(["LISTEN 0 4096 0.0.0.0:41234 0.0.0.0:*"])
-        assert "0.0.0.0:41234" in finding.detail
-        assert "(" not in finding.detail.split("Kjør")[0].replace("(LLMNR)", "")
+        from pless.audit import describe_address
+
+        assert describe_address("0.0.0.0:41234") == "0.0.0.0:41234"
+        assert (
+            "0.0.0.0:41234"
+            in check_listening_sockets(["LISTEN 0 4096 0.0.0.0:41234 0.0.0.0:*"]).detail
+        )
 
 
 class TestUfw:
@@ -79,7 +83,7 @@ class TestUfw:
 
 
 class TestDockerPorts:
-    """Docker skriver iptables-regler forbi UFW — den viktigste fella."""
+    """Docker writes iptables rules that bypass UFW — the most important trap."""
 
     def test_loopback_published_passes(self) -> None:
         assert check_docker_ports(["paperless-webserver-1 127.0.0.1:8000->8000/tcp"]).ok
@@ -90,10 +94,10 @@ class TestDockerPorts:
     def test_wildcard_publish_fails(self) -> None:
         finding = check_docker_ports(["paperless-webserver-1 0.0.0.0:8000->8000/tcp"])
         assert not finding.ok
-        assert "omgår UFW" in finding.detail
+        assert "bypasses UFW" in finding.detail
 
     def test_bare_port_publish_fails(self) -> None:
-        # `ports: ["8000:8000"]` uten IP-prefiks er nettopp feilen vi vokter mot.
+        # `ports: ["8000:8000"]` without an IP prefix is exactly the mistake we guard against.
         assert not check_docker_ports(["web 8000->8000/tcp"]).ok
 
     def test_mixed_mappings_flag_only_the_leaky_one(self) -> None:
@@ -122,7 +126,7 @@ class TestEncryptedStorage:
         assert finding.severity == Severity.CRITICAL
 
     def test_unmounted_is_warning_not_critical(self) -> None:
-        # Umontert betyr som regel «låst», som er trygt — ikke et sikkerhetsavvik.
+        # Unmounted usually means locked, which is safe — not a security finding.
         finding = check_encrypted_storage([])
         assert not finding.ok
         assert finding.severity == Severity.WARNING
@@ -148,7 +152,7 @@ def test_analyse_reports_lan_exposure_end_to_end() -> None:
     report = analyse(output)
     assert not report.ok
     failed = {f.check for f in report.failures}
-    assert failed == {"lyttende sockets", "brannmur"}
+    assert failed == {"listening sockets", "firewall"}
 
 
 def test_analyse_passes_a_fully_hardened_host() -> None:

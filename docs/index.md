@@ -2,9 +2,19 @@
 
 **A searchable archive of your documents, on hardware you own.**
 
-`pless` sets up and operates a self-hosted [Paperless-ngx](https://docs.paperless-ngx.com/)
-installation — on a Raspberry Pi in your home, a cloud server, or a local VM — with two
-properties most self-hosting guides skip:
+[Paperless-ngx](https://docs.paperless-ngx.com/) is a document management system for the
+paper that accumulates in a life: invoices, receipts, contracts, diplomas, letters from
+institutions that still send letters. You feed it scans and PDFs; it runs OCR over them so
+the text inside becomes searchable, then sorts them by correspondent, document type and date
+— guessing sensibly, and learning from your corrections. What you get back is a filing
+cabinet you can grep, reachable from a browser or a phone.
+
+It is open source and self-hosted, which is the point: your tax returns and your children's
+birth certificates stay on hardware you control rather than in someone else's product
+roadmap.
+
+`pless` sets that up and operates it — on a Raspberry Pi in your home, a cloud server, or a
+local VM — with two properties most self-hosting guides skip:
 
 - **Encrypted at rest.** Your documents live on a LUKS2-encrypted volume. The key is never
   stored on the machine. Someone who walks off with your Pi gets hardware and an operating
@@ -143,6 +153,9 @@ each piece:
 | Hetzner Cloud as a target | :material-progress-clock: Code and unit tests, not validated live |
 | **Importing your documents** | :material-close: Not built yet |
 | **Backup, restore, and restore drills** | :material-close: Not built yet |
+| Readiness gate (`pless preflight`) | :material-check: Working |
+| Alternative unlock methods (Tang, phone-based) | :material-close: Planned |
+| Password-manager integration for generated secrets | :material-close: Planned |
 | Web setup wizard | :material-close: Planned |
 
 ### What comes next
@@ -159,4 +172,18 @@ the documents.
 **Restore drills** ship with backup, not after it. A backup that has never been restored is
 not a backup — it is a belief. `pless backup verify` will therefore perform a real restore
 into a scratch location and check what came back, rather than merely confirming that an
-archive file exists.
+archive file exists. `pless preflight` already refuses to give a green light until that
+verification exists.
+
+**Easier ways to unlock.** Manual unlock after every reboot is the honest default, but not
+the only possible one. [Clevis and Tang](https://github.com/latchset/tang) would let the
+machine unlock itself while at home and stay sealed anywhere else; unlocking from a phone is
+worth exploring too. The LUKS volume is created with a spare key slot so either can be added
+without re-encrypting anything.
+
+**Password-manager integration.** Generated secrets currently land in `.env`, and copying
+them somewhere durable is left to you — the most error-prone step in the whole setup. Writing
+them directly through a password manager's CLI would close that gap.
+
+**A web setup wizard**, driving the same core modules as the CLI, for people who would rather
+not start with a terminal.

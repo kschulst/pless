@@ -1,9 +1,9 @@
-"""Genererer docker-compose.yml og server-side .env for Paperless-stacken.
+"""Generates docker-compose.yml and the server-side .env for the stack.
 
-Alt persistent bor under /opt/paperless (LUKS-montert). Webserveren bindes
-KUN til 127.0.0.1 på targetet (beslutning #3) — tilgang via SSH-tunnel eller
-tailscale serve. Secrets går i server-.env (på kryptert disk) og refereres
-med ${}-interpolasjon i compose-fila.
+Everything persistent lives under /opt/paperless, on the encrypted volume.
+The web server binds to 127.0.0.1 on the target only — access goes through an
+SSH tunnel or Tailscale. Secrets live in the server-side .env on the encrypted
+volume and are referenced with ${} interpolation from the compose file.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ WEB_PORT = 8000
 
 SYSTEMD_UNIT = f"""\
 [Unit]
-Description=Paperless-ngx compose-stack (pless)
+Description=Paperless-ngx compose stack (pless)
 Requires=docker.service
 After=docker.service
-# Nekter å starte hvis LUKS-disken ikke er montert — `pless unlock` starter oss.
+# Refuses to start unless the encrypted volume is mounted; `pless unlock` starts us.
 RequiresMountsFor={INSTALL_DIR}
 
 [Service]
@@ -113,7 +113,7 @@ def render_compose(cfg: config.Config) -> str:
 
 
 def render_server_env(secrets: config.Secrets) -> str:
-    """Kun secrets — resten står eksplisitt i compose-fila. Havner på kryptert disk."""
+    """Secrets only; everything else is explicit in the compose file."""
     missing = [
         name
         for name, value in (
@@ -125,7 +125,7 @@ def render_server_env(secrets: config.Secrets) -> str:
     ]
     if missing:
         raise ValueError(
-            f"Mangler secrets i lokal .env: {', '.join(missing)} — kjør `pless init --secrets`."
+            f"Missing secrets in your local .env: {', '.join(missing)}. Run `pless init --secrets`."
         )
     return (
         f"POSTGRES_PASSWORD={secrets.postgres_password}\n"

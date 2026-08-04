@@ -1,8 +1,9 @@
-"""LUKS-datapartisjon på target: init, unlock, lock, status (beslutning #13–15).
+"""The encrypted data volume on the target: init, unlock, lock, status.
 
-All Paperless-data bor på en LUKS2-kryptert enhet montert på /opt/paperless.
-Nøkkelen bor ALDRI på enheten — passphrase sendes via stdin ved unlock.
-På vm-target simuleres den fysiske disken med en loop-fil.
+All Paperless data lives on a LUKS2 volume mounted at /opt/paperless. The key
+is never stored on the machine — the passphrase arrives on stdin at unlock
+time. On a VM, and by default on a Pi, the block device is a sparse file
+attached as a loop device.
 """
 
 from __future__ import annotations
@@ -23,10 +24,12 @@ class StorageError(RuntimeError):
 
 
 def detect_cipher_args(cpuinfo: str) -> list[str]:
-    """Velg LUKS-cipher fra /proc/cpuinfo (beslutning #14).
+    """Pick the LUKS cipher from /proc/cpuinfo.
 
-    Pi 5/x86/Apple-VM har AES-instruksjoner → aes-xts. Pi 4 og eldre mangler
-    dem (Broadcom lisensierte ikke crypto extensions) → Adiantum.
+    CPUs with AES instructions (Pi 5, x86) get AES-XTS at full hardware speed.
+    The Pi 4 and older lack them, because Broadcom did not license the ARM
+    crypto extensions, so they get Adiantum — the cipher Google designed for
+    exactly this situation.
     """
 
     def line_has_aes(line: str) -> bool:
@@ -38,9 +41,9 @@ def detect_cipher_args(cpuinfo: str) -> list[str]:
     return ["--cipher", "xchacha20,aes-adiantum-plain64", "--key-size", "256"]
 
 
-# Shell-snutt som finner (og på vm: oppretter) blokk-enheten for data, og
-# skriver devicestien på stdout. Loop-oppsett overlever ikke reboot, derfor
-# kjøres dette både ved init og unlock.
+# Finds — and on first use creates — the block device backing the data volume,
+# writing its path to stdout. Loop devices do not survive a reboot, so this
+# runs on both init and unlock.
 _ENSURE_LOOP_DEVICE = f"""\
 set -eu
 sudo mkdir -p /var/lib/pless
@@ -79,7 +82,7 @@ def _run_ok(target: TargetHost, command: str, input_text: str | None = None) -> 
     result = _run(target, command, input_text)
     if not result.ok:
         raise StorageError(
-            f"Fjernkommando feilet: {result.stderr.strip() or result.stdout.strip()}"
+            f"Remote command failed: {result.stderr.strip() or result.stdout.strip()}"
         )
     return result.stdout.strip()
 
@@ -92,10 +95,10 @@ def resolve_data_device(cfg: config.Config, target: TargetHost) -> str:
             return _run_ok(target, _ENSURE_LOOP_DEVICE.format(size_gb=cfg.pi.data_size_gb))
         if not cfg.pi.data_device:
             raise StorageError(
-                '[pi] data_mode = "partition" krever at data_device er satt i pless.toml.'
+                '[pi] data_mode = "partition" requires data_device to be set in pless.toml.'
             )
         return cfg.pi.data_device
-    raise StorageError(f"LUKS-lagring støttes ikke for target {cfg.target.type!r} ennå.")
+    raise StorageError(f"Encrypted storage is not supported for target {cfg.target.type!r} yet.")
 
 
 def status(cfg: config.Config, target: TargetHost) -> StorageStatus:
@@ -107,14 +110,13 @@ def status(cfg: config.Config, target: TargetHost) -> StorageStatus:
 
 
 def init(cfg: config.Config, target: TargetHost, passphrase: str) -> str:
-    """Formater datadisken som LUKS2 + ext4 og monter den. DESTRUKTIVT."""
+    """Format the data volume as LUKS2 with ext4 and mount it. Destructive."""
     device = resolve_data_device(cfg, target)
     if _run(target, f"sudo cryptsetup isLuks {device}").ok:
-        raise StorageError(f"{device} er allerede LUKS-formatert — init nekter å overskrive.")
+        raise StorageError(f"{device} is already LUKS-formatted — init refuses to overwrite it.")
 
     cpuinfo = _run_ok(target, "cat /proc/cpuinfo")
-    cipher_args = detect_cipher_args(cpuinfo)
-    cipher_str = " ".join(cipher_args)
+    cipher_str = " ".join(detect_cipher_args(cpuinfo))
 
     _run_ok(
         target,
@@ -135,7 +137,7 @@ def unlock(cfg: config.Config, target: TargetHost, passphrase: str) -> StorageSt
     device = resolve_data_device(cfg, target)
     current = status(cfg, target)
     if not current.is_luks:
-        raise StorageError(f"{device} er ikke LUKS-formatert — kjør `pless storage init` først.")
+        raise StorageError(f"{device} is not LUKS-formatted — run `pless storage init` first.")
     if not current.is_open:
         _run_ok(
             target,
@@ -144,8 +146,8 @@ def unlock(cfg: config.Config, target: TargetHost, passphrase: str) -> StorageSt
         )
     if not current.is_mounted:
         _run_ok(target, f"sudo mkdir -p {MOUNTPOINT} && sudo mount {MAPPER_DEV} {MOUNTPOINT}")
-    # Deploy-fasen legger en paperless.service med RequiresMountsFor=/opt/paperless;
-    # start den hvis den finnes, ellers er dette en no-op.
+    # Deploy installs paperless.service with RequiresMountsFor=/opt/paperless.
+    # Start it if it exists; otherwise this is a no-op.
     _run(target, "sudo systemctl start paperless.service 2>/dev/null || true")
     return status(cfg, target)
 

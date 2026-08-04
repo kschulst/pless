@@ -37,13 +37,13 @@ def test_parse_facts_reads_all_fields() -> None:
 
 
 def test_any_hostname_is_accepted() -> None:
-    # Verktøyet skal ikke ha meninger om hva boksen heter.
+    # The tool must have no opinion about what the machine is called.
     for name in ("paperless", "testvert", "arkiv-01", "pi"):
         assert parse_facts(facts_output(hostname=name)).hostname == name
 
 
 def test_field_order_does_not_matter() -> None:
-    # Nøkkel=verdi nettopp for å tåle at rekkefølgen eller et ekstra felt endrer seg.
+    # Key=value exists precisely so order changes or extra fields do not break parsing.
     scrambled = "\n".join(reversed(facts_output().strip().splitlines()))
     facts = parse_facts(scrambled + "\nekstra_felt=noe\n")
     assert facts.hostname == "testvert"
@@ -51,7 +51,7 @@ def test_field_order_does_not_matter() -> None:
 
 
 def test_quoted_os_release_values_are_stripped() -> None:
-    # /etc/os-release siterer gjerne verdiene: VERSION_ID="13"
+    # /etc/os-release often quotes its values: VERSION_ID="13"
     facts = parse_facts(facts_output(distro_id='"debian"', distro_version='"13"'))
     assert facts.distro_id == "debian"
     assert facts.distro_version == "13"
@@ -64,12 +64,12 @@ def test_parse_facts_flags_non_arm64() -> None:
 
 
 def test_parse_facts_rejects_output_missing_required_fields() -> None:
-    with pytest.raises(BootstrapError, match="Mangler fakta"):
+    with pytest.raises(BootstrapError, match="Missing facts"):
         parse_facts("hostname=testvert\narch=aarch64\n")
 
 
 class TestDistroSupport:
-    """Debian og Ubuntu er likestilt (beslutning: begge testes)."""
+    """Debian and Ubuntu are equals — both are tested."""
 
     def test_debian_13_supported(self) -> None:
         assert parse_facts(facts_output(distro_id="debian", distro_version="13")).distro_supported
@@ -83,7 +83,7 @@ class TestDistroSupport:
         assert facts.distro_supported
 
     def test_debian_12_rejected(self) -> None:
-        # Bookworm mangler docker-compose-v2 i apt — ville krevd Dockers eget repo.
+        # Bookworm lacks docker-compose-v2 in apt, which would need Docker's own repo.
         facts = parse_facts(facts_output(distro_id="debian", distro_version="12"))
         assert not facts.distro_supported
 
@@ -97,30 +97,30 @@ class TestDistroSupport:
 
 
 def test_bootstrap_script_matches_cloud_init_spec() -> None:
-    script = render_bootstrap_script("Europe/Oslo", admin_user="kenneth")
+    script = render_bootstrap_script("Europe/Oslo", admin_user="deploy")
 
     assert script.startswith("#!/bin/sh\nset -eu")
     assert "timedatectl set-timezone Europe/Oslo" in script
     assert "docker.io" in script and "unattended-upgrades" in script
     assert "PasswordAuthentication no" in script
     assert 'Automatic-Reboot "true"' in script
-    assert "usermod -aG docker kenneth" in script
+    assert "usermod -aG docker deploy" in script
     assert "ufw --force enable" in script
 
 
 def test_docker_packages_differ_between_distros() -> None:
-    # Verifisert empirisk på ekte VM-er, ikke antatt fra dokumentasjon.
+    # Verified empirically on real VMs, not assumed from documentation.
     debian = packages_for("debian")
     ubuntu = packages_for("ubuntu")
 
-    # Debian: Compose v2 heter «docker-compose»; «docker-compose-v2» finnes ikke.
+    # Debian: Compose v2 is called docker-compose; docker-compose-v2 does not exist.
     assert "docker-compose" in debian
     assert "docker-compose-v2" not in debian
-    # Debian skiller ut klienten, og den er kun en Recommends — vi bruker
-    # --no-install-recommends, så uten denne får man daemon uten `docker`.
+    # Debian splits out the client, and it is only a Recommends — we use
+    # --no-install-recommends, so without it you get a daemon with no `docker`.
     assert "docker-cli" in debian
 
-    # Ubuntu: motsatt navn, og klienten følger med docker.io.
+    # Ubuntu: the opposite name, and the client ships with docker.io.
     assert "docker-compose-v2" in ubuntu
     assert "docker-compose" not in ubuntu
 
@@ -128,29 +128,29 @@ def test_docker_packages_differ_between_distros() -> None:
 
 
 def test_unknown_distro_has_no_guessed_docker_packages() -> None:
-    with pytest.raises(ValueError, match="docker-pakker"):
+    with pytest.raises(ValueError, match="Docker packages"):
         packages_for("fedora")
 
 
 def test_bootstrap_script_waits_for_apt_lock() -> None:
-    # En fersk maskin kjører cloud-init/unattended-upgrades ved første boot;
-    # uten venting feiler bootstrap med «Could not get lock».
+    # A fresh machine runs cloud-init or unattended-upgrades on first boot;
+    # without waiting, bootstrap fails with "Could not get lock".
     script = render_bootstrap_script("Europe/Oslo")
     assert "cloud-init status --wait" in script
     assert "DPkg::Lock::Timeout=300" in script
-    # Ingen bare apt-get-kall utenom via $APT-variabelen.
+    # No bare apt-get calls outside the $APT variable.
     assert "\napt-get " not in script
 
 
 def test_bootstrap_disables_llmnr_but_keeps_mdns() -> None:
-    # LLMNR (5355) lytter på alle interfacer og er en kjent forgiftningsvektor.
-    # mDNS (5353) må overleve — «vertsnavn.local» er dokumentert i oppsettet.
+    # LLMNR (5355) listens on every interface and is a known poisoning vector.
+    # mDNS (5353) must survive — hostname.local is documented in the setup guide.
     script = render_bootstrap_script("Europe/Oslo")
     assert "LLMNR=no" in script
     assert "MulticastDNS=no" not in script
 
 
 def test_bootstrap_script_never_touches_authorized_keys() -> None:
-    # Vi kom inn over SSH — nøkkelen virker alt, og scriptet skal ikke kunne låse oss ute.
+    # We got in over SSH, so the key already works; the script must not lock us out.
     script = render_bootstrap_script("Europe/Oslo")
     assert "authorized_keys" not in script

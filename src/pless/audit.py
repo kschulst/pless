@@ -1,11 +1,11 @@
-"""Eksponeringsrevisjon: hva kan en angriper på LAN-et faktisk nå?
+"""Exposure audit: what can someone already on your network actually reach?
 
-Trusselmodell: noen har allerede tilgang til det lokale nettet (kompromittert
-wifi, gjesteenhet, IoT-dings). De skal ikke finne noen tjeneste å angripe, og
-ikke kunne hente ut dokumenter.
+Threat model: an attacker already has access to the local network — a guest's
+laptop, an unpatched IoT device, a compromised phone. They should find no
+service to attack and no way to extract documents.
 
-Innsamling skjer i én SSH-runde; analysen er rene funksjoner slik at de kan
-testes uten maskin — og gjenbrukes av et web-lag senere.
+Collection happens in a single SSH round trip; the analysis is pure functions
+so it can be tested without a machine, and reused by a web layer later.
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from enum import StrEnum
 
 from pless import composegen, storage
 
-# Loopback og Tailscale er greie å lytte på; alt annet er LAN-eksponering.
+# Loopback is fine to listen on; anything else is LAN exposure.
 _LOOPBACK_PREFIXES = ("127.", "[::1]", "::1")
 
 
 class Severity(StrEnum):
-    CRITICAL = "kritisk"
-    WARNING = "advarsel"
+    CRITICAL = "critical"
+    WARNING = "warning"
 
 
 @dataclass
@@ -45,8 +45,8 @@ class AuditReport:
         return not self.failures
 
 
-# Én runde over SSH. Seksjonsmarkører gjør utdataen parsebar uten å anta
-# rekkefølge eller at hver kommando finnes.
+# One round trip over SSH. Section markers make the output parseable without
+# assuming an order, or that every command exists.
 COLLECT_SCRIPT = f"""\
 echo "##LISTEN"
 sudo ss -tlnH 2>/dev/null || true
@@ -80,7 +80,7 @@ def _is_loopback(address: str) -> bool:
 
 
 def parse_listening_addresses(ss_lines: list[str]) -> list[str]:
-    """Hent 'adresse:port' fra `ss -tlnH`-linjer (kolonne 4)."""
+    """Extract 'address:port' from `ss -tlnH` lines (column 4)."""
     addresses = []
     for line in ss_lines:
         fields = line.split()
@@ -89,7 +89,7 @@ def parse_listening_addresses(ss_lines: list[str]) -> list[str]:
     return addresses
 
 
-# Gjør funnene lesbare: en portnummer alene sier lite om hva som må fikses.
+# Make findings readable: a bare port number says little about what to fix.
 KNOWN_PORTS = {
     "22": "SSH",
     "5353": "mDNS",
@@ -110,29 +110,27 @@ def check_listening_sockets(ss_lines: list[str]) -> Finding:
     exposed = [addr for addr in parse_listening_addresses(ss_lines) if not _is_loopback(addr)]
     if not exposed:
         return Finding(
-            check="lyttende sockets",
+            check="listening sockets",
             ok=True,
-            detail="Ingenting lytter utenfor loopback — LAN-et ser null porter.",
+            detail="Nothing listens outside loopback — your LAN sees zero ports.",
         )
     described = ", ".join(describe_address(addr) for addr in exposed)
     return Finding(
-        check="lyttende sockets",
+        check="listening sockets",
         ok=False,
-        detail=(
-            f"Eksponert mot LAN: {described}. Kjør `pless harden` for å binde SSH til tailscale0."
-        ),
+        detail=(f"Exposed to LAN: {described}. Run `pless harden` to bind SSH to tailscale0."),
     )
 
 
 def check_ufw(ufw_lines: list[str]) -> Finding:
     text = " ".join(ufw_lines).lower()
     if "status: active" not in text:
-        return Finding(check="brannmur", ok=False, detail="UFW er ikke aktiv.")
+        return Finding(check="firewall", ok=False, detail="UFW is not active.")
     if "deny (incoming)" not in text:
         return Finding(
-            check="brannmur", ok=False, detail="UFW har ikke default deny på innkommende."
+            check="firewall", ok=False, detail="UFW does not default-deny incoming traffic."
         )
-    # «Anywhere» uten interface-binding betyr åpent mot LAN.
+    # "Anywhere" without an interface binding means open to the LAN.
     open_to_lan = [
         line
         for line in ufw_lines
@@ -143,65 +141,61 @@ def check_ufw(ufw_lines: list[str]) -> Finding:
     ]
     if open_to_lan:
         return Finding(
-            check="brannmur",
+            check="firewall",
             ok=False,
-            detail=f"Regler åpne mot hele LAN-et: {'; '.join(open_to_lan)}",
+            detail=f"Rules open to the whole LAN: {'; '.join(open_to_lan)}",
         )
-    return Finding(
-        check="brannmur", ok=True, detail="UFW aktiv, default deny, ingen LAN-åpne regler."
-    )
+    return Finding(check="firewall", ok=True, detail="UFW active, default deny, no LAN-open rules.")
 
 
 def check_docker_ports(docker_lines: list[str]) -> Finding:
-    """Docker skriver egne iptables-regler FORBI UFW — en publisert port uten
-    127.0.0.1-prefiks blir LAN-synlig selv om UFW sier deny."""
+    """Docker writes its own iptables rules, bypassing UFW — a port published
+    without a 127.0.0.1 prefix is LAN-visible even though UFW says deny."""
     leaked = []
     for line in docker_lines:
         name, _, ports = line.partition(" ")
         for mapping in ports.split(","):
             mapping = mapping.strip()
             if "->" not in mapping:
-                continue  # kun container-intern port, ikke publisert
+                continue  # container-internal port only, not published
             if not mapping.startswith("127.0.0.1:"):
                 leaked.append(f"{name}: {mapping}")
     if leaked:
         return Finding(
-            check="docker-porter",
+            check="docker ports",
             ok=False,
             detail=(
-                f"Publisert utenfor loopback (omgår UFW!): {'; '.join(leaked)}. "
-                "Alle porter må bindes med 127.0.0.1-prefiks."
+                f"Published outside loopback (bypasses UFW!): {'; '.join(leaked)}. "
+                "All ports must be bound with a 127.0.0.1 prefix."
             ),
         )
-    return Finding(
-        check="docker-porter", ok=True, detail="Ingen container publiserer utenfor loopback."
-    )
+    return Finding(check="docker ports", ok=True, detail="No container publishes outside loopback.")
 
 
 def check_sshd(sshd_lines: list[str]) -> Finding:
     settings = dict(line.split(None, 1) for line in sshd_lines if " " in line)
     if settings.get("passwordauthentication", "").strip() != "no":
-        return Finding(check="ssh", ok=False, detail="Passord-innlogging er ikke avslått.")
-    return Finding(check="ssh", ok=True, detail="Kun nøkkelbasert innlogging.")
+        return Finding(check="ssh", ok=False, detail="Password authentication is not disabled.")
+    return Finding(check="ssh", ok=True, detail="Key-based authentication only.")
 
 
 def check_encrypted_storage(mount_lines: list[str]) -> Finding:
     source = mount_lines[0] if mount_lines else ""
     if not source:
         return Finding(
-            check="kryptert lagring",
+            check="encrypted storage",
             ok=False,
-            detail=f"{composegen.INSTALL_DIR} er ikke montert — er disken låst?",
+            detail=f"{composegen.INSTALL_DIR} is not mounted — is the volume locked?",
             severity=Severity.WARNING,
         )
     if storage.MAPPER_NAME not in source:
         return Finding(
-            check="kryptert lagring",
+            check="encrypted storage",
             ok=False,
-            detail=f"{composegen.INSTALL_DIR} ligger på {source}, ikke på LUKS-enheten.",
+            detail=f"{composegen.INSTALL_DIR} is on {source}, not on the LUKS device.",
         )
     return Finding(
-        check="kryptert lagring", ok=True, detail=f"Data ligger på LUKS-enheten {source}."
+        check="encrypted storage", ok=True, detail=f"Data lives on the LUKS device {source}."
     )
 
 
