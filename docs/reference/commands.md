@@ -1,0 +1,169 @@
+# Commands
+
+Every command is safe to run twice. If one fails halfway, run it again rather than cleaning
+up by hand.
+
+!!! note "The CLI currently speaks Norwegian"
+
+    `pless` was written for its author before it became a product, so its help text and
+    output are in Norwegian while this documentation is in English. Translation is on the
+    roadmap. The command *names* and flags below are accurate.
+
+## Setup
+
+### `pless init [--secrets]`
+
+Creates `.env` from `.env.example`. With `--secrets`, generates a Paperless admin password,
+a Django secret key and a PostgreSQL password.
+
+Copy the generated values into your password manager immediately. `.env` is a local cache;
+your password manager is the source of truth.
+
+### `pless doctor`
+
+Checks your local environment: Python version, `ssh`, `uv`, the config file, your SSH key,
+and whatever the active target requires. Exits non-zero if something is missing.
+
+Run this first, and whenever something behaves oddly.
+
+## Provisioning
+
+### `pless bootstrap`
+
+Applies the host spec over SSH: Docker, UFW, fail2ban, SSH hardening, unattended-upgrades,
+and disabling LLMNR.
+
+Prints hostname, model, OS, architecture and RAM before changing anything — read that line to
+confirm you are on the machine you think you are. Refuses to continue on 32-bit
+architectures or unsupported distributions.
+
+Waits for cloud-init and the apt lock, so it is safe on a machine that has just booted for
+the first time.
+
+### `pless server status`
+
+State of the active target. Shows VM state and address, cloud server details, or SSH
+reachability, depending on the target type.
+
+### `pless server df`
+
+Disk usage on the target's root filesystem.
+
+### `pless ssh`
+
+Interactive SSH session on the active target.
+
+## Storage
+
+### `pless storage init --confirm`
+
+Formats the data volume as LUKS2 with ext4 and mounts it at `/opt/paperless`.
+**Destructive** — it refuses to overwrite an existing LUKS volume.
+
+Asks for a passphrase twice. The cipher is chosen automatically: AES-XTS where the CPU has
+AES instructions, Adiantum otherwise.
+
+!!! danger "No recovery"
+
+    Save the passphrase in your password manager before you type it. There is no reset.
+
+### `pless storage status`
+
+Whether the volume is LUKS-formatted, open, and mounted.
+
+### `pless unlock`
+
+Unlocks and mounts the volume, then starts the stack. This is what you run after every
+reboot or power cut.
+
+### `pless lock`
+
+Stops the stack, unmounts and closes the volume. Useful before physically moving the
+machine.
+
+## Deployment
+
+### `pless deploy paperless`
+
+Writes the compose file, the server-side `.env` (mode 0600, on the encrypted volume) and the
+systemd unit, then starts the stack. Requires the volume to be mounted.
+
+First run pulls roughly 2 GB of images and migrates the database.
+
+### `pless deploy status`
+
+Container-by-container state.
+
+### `pless deploy logs [service] [--tail N]`
+
+Logs from the stack. Services: `webserver`, `db`, `broker`, `gotenberg`, `tika`.
+
+### `pless paperless health`
+
+HTTP check against Paperless on the target's localhost.
+
+### `pless tunnel`
+
+SSH tunnel forwarding Paperless to `http://localhost:8000`. Ctrl-C closes it.
+
+## Access and security
+
+### `pless tailscale up`
+
+Installs Tailscale and joins the tailnet. Which tailnet is decided by `TS_AUTHKEY` — one key
+belongs to one tailnet. The key is passed on stdin, never in the command line where `ps`
+could read it.
+
+### `pless tailscale status`
+
+Tailscale state on the target.
+
+### `pless harden --confirm`
+
+Moves SSH from the LAN to the Tailscale interface only. After this, nothing on your local
+network can reach the machine.
+
+Refuses to run unless Tailscale is confirmed working, so you cannot lock yourself out. If
+the tailnet is later lost entirely, recovery is a monitor and keyboard on the machine.
+
+### `pless audit [--json]`
+
+Checks network exposure and storage encryption. Exits non-zero on findings, so it works in
+cron and CI. See [Verify your box is sealed](../cookbook/verify-security.md).
+
+## Documents
+
+### `pless docs scan <path> [--hashes]`
+
+Recursively classifies a local folder: ready to import, needs conversion (`.enex`, `.html`),
+or unsupported. Skips hidden and system files. With `--hashes`, computes SHA-256 and reports
+duplicate content.
+
+### `pless docs estimate <path> [--local-only]`
+
+Projects disk usage after import, using deliberately pessimistic growth factors. Without
+`--local-only`, compares against the target's actual free space and recommends whether to
+proceed, batch the import, or add storage.
+
+## Local VM
+
+### `pless vm create`
+
+Creates the development VM. With the `lima` backend you get Debian 13, provisioned by
+`pless bootstrap`. With `multipass` you get Ubuntu, provisioned by cloud-init.
+
+### `pless vm destroy --confirm`
+
+Deletes the VM and everything on it. Asks you to type the VM's name.
+
+## Hetzner
+
+### `pless hetzner check-token`
+
+Verifies `HCLOUD_TOKEN` with read-only API calls and lists visible servers and locations.
+
+## Not built yet
+
+`pless docs upload`, `pless backup export`, `pless backup download`, `pless backup verify`
+and `pless update` are planned but do not exist. See [Cookbook](../cookbook/index.md) for
+what to do in the meantime.

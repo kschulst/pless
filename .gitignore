@@ -14,3 +14,7 @@ dist/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# Zensical build output
+site/
+.zensical/
