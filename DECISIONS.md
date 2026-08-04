@@ -64,9 +64,23 @@ Det endrer #12/#13 (som forutsatte SD + separat minnepinne).
 | 36 | Docker-pakker per distro | `hostspec.packages_for()` gaffler: Debian → `docker-cli` + `docker-compose`, Ubuntu → `docker-compose-v2`. Verifisert empirisk, ikke fra dokumentasjon | Nettsøk påsto at `docker-compose-v2` fantes i Debian 13 — det gjør den ikke; Compose v2 heter der `docker-compose` (v2.26.1). Debian skiller dessuten klienten ut i `docker-cli`, som kun er en Recommends, og vi bruker `--no-install-recommends`. Begge feilene ga en tilsynelatende vellykket bootstrap med daemon uten `docker`-kommando |
 | 37 | Vent på apt-låsen | Bootstrap venter på `cloud-init status --wait` og setter `DPkg::Lock::Timeout=300` | En fersk maskin kjører cloud-init eller unattended-upgrades ved første boot. Uten dette feiler bootstrap med «Could not get lock» — og det ville truffet Pi-en like hardt som VM-en |
 
+## 2026-08-04: Dokumentasjon, publisering og produktretning
+
+| # | Tema | Beslutning | Begrunnelse |
+|---|------|-----------|-------------|
+| 38 | Docs-verktøy | Zensical | Material for MkDocs går EOL 5. november 2026, og Zensical er samme teams etterfølger. Det «utbredte» valget er annonsert dødt — å velge det ville betydd migrering innen tre måneder. Python-basert, som resten av prosjektet |
+| 39 | Docs-språk | **Engelsk** på nettsiden; `DECISIONS.md` forblir norsk som internt arbeidsdokument | Målgruppen for et selvhostet Paperless-oppsett er global, og hele økosystemet rundt (Paperless, Tailscale, Docker) er engelsk. Tospråklig ble vurdert og forkastet: én av versjonene råtner alltid |
+| 40 | Publisering | Offentlig repo `kschulst/pless` fra dag én, med ærlig alfa-merking og en statustabell som skiller det som virker fra det som ikke finnes | Åpenhet om umodenhet koster ingenting; å dokumentere funksjoner som ikke finnes koster tillit. Reponavn = kommandonavn = PyPI-navn |
+| 41 | Én kilde per ting | `docs/pi-oppsett.md` absorbert av installasjonskapittelet, README krympet til pitch + lenke | Duplisert dokumentasjon kommer alltid i utakt |
+| 42 | Lisens | MIT | Vanligste valget for et CLI-verktøy; lavest friksjon for gjenbruk |
+| 43 | Restore-øvelser | `pless backup verify` skal gjøre en EKTE gjenoppretting til et scratch-område og inspisere resultatet — ikke bare bekrefte at en arkivfil finnes. Leveres SAMMEN med backup, ikke etterpå | En backup som aldri er gjenopprettet er en tro, ikke en backup |
+| 44 | Web-wizard | Planlagt: web-grensesnitt for oppsett som driver CLI-et / et felles API under panseret. Forsterker #35 — kjernemodulene forblir fri for typer/rich, og alt som spør om hemmeligheter må ha en ikke-interaktiv vei | Senker terskelen for at andre kommer i gang, som er hele poenget med #34 |
+| 45 | Åpen kildekode | Målet er et selvstendig opensource-produkt. CI (ruff + pytest) kjører på hver push | Følger av #34 og #40 |
+
 ## Åpne punkter
 
-- **Neste store steg: installere på Kenneths Pi 5.** Krever at han er til stede (flashing med skjerm/tastatur). Guide: `docs/pi-oppsett.md`.
+- **CLI-et snakker fortsatt norsk** mens dokumentasjonen er engelsk. Docs viser engelsk konsolloutput som ikke stemmer med virkeligheten. Må oversettes før prosjektet deles bredt — se #39/#40.
+- **Neste store steg: installere på Kenneths Pi 5.** Krever at han er til stede (flashing med skjerm/tastatur). Guide: `docs/installation/raspberry-pi.md`.
 - Import- og backup-fasene er ikke bygget ennå — arkivet finnes ikke før de er det.
 - `TS_AUTHKEY` mangler, så `pless tailscale up` og `pless harden` er ikke live-testet; koden er enhetstestet.
 - Konverteringspipeline for `.enex` — venter på resultat av `pless docs scan` mot ekte data.
