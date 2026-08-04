@@ -142,6 +142,14 @@ def test_bootstrap_script_waits_for_apt_lock() -> None:
     assert "\napt-get " not in script
 
 
+def test_bootstrap_disables_llmnr_but_keeps_mdns() -> None:
+    # LLMNR (5355) lytter på alle interfacer og er en kjent forgiftningsvektor.
+    # mDNS (5353) må overleve — «vertsnavn.local» er dokumentert i oppsettet.
+    script = render_bootstrap_script("Europe/Oslo")
+    assert "LLMNR=no" in script
+    assert "MulticastDNS=no" not in script
+
+
 def test_bootstrap_script_never_touches_authorized_keys() -> None:
     # Vi kom inn over SSH — nøkkelen virker alt, og scriptet skal ikke kunne låse oss ute.
     script = render_bootstrap_script("Europe/Oslo")

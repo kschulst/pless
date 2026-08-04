@@ -44,6 +44,22 @@ class TestListeningSockets:
     def test_empty_output_passes(self) -> None:
         assert check_listening_sockets([]).ok
 
+    def test_known_ports_are_named_in_the_finding(self) -> None:
+        # Et portnummer alene sier lite om hva som må fikses.
+        finding = check_listening_sockets(
+            [
+                "LISTEN 0 4096 0.0.0.0:22 0.0.0.0:*",
+                "LISTEN 0 4096 0.0.0.0:5355 0.0.0.0:*",
+            ]
+        )
+        assert "(SSH)" in finding.detail
+        assert "(LLMNR)" in finding.detail
+
+    def test_unknown_port_is_shown_without_a_guessed_name(self) -> None:
+        finding = check_listening_sockets(["LISTEN 0 4096 0.0.0.0:41234 0.0.0.0:*"])
+        assert "0.0.0.0:41234" in finding.detail
+        assert "(" not in finding.detail.split("Kjør")[0].replace("(LLMNR)", "")
+
 
 class TestUfw:
     def test_inactive_fails(self) -> None:

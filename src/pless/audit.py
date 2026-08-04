@@ -89,6 +89,23 @@ def parse_listening_addresses(ss_lines: list[str]) -> list[str]:
     return addresses
 
 
+# Gjør funnene lesbare: en portnummer alene sier lite om hva som må fikses.
+KNOWN_PORTS = {
+    "22": "SSH",
+    "5353": "mDNS",
+    "5355": "LLMNR",
+    "8000": "Paperless",
+    "5432": "Postgres",
+    "6379": "Redis",
+}
+
+
+def describe_address(address: str) -> str:
+    port = address.rsplit(":", 1)[-1]
+    name = KNOWN_PORTS.get(port)
+    return f"{address} ({name})" if name else address
+
+
 def check_listening_sockets(ss_lines: list[str]) -> Finding:
     exposed = [addr for addr in parse_listening_addresses(ss_lines) if not _is_loopback(addr)]
     if not exposed:
@@ -97,12 +114,12 @@ def check_listening_sockets(ss_lines: list[str]) -> Finding:
             ok=True,
             detail="Ingenting lytter utenfor loopback — LAN-et ser null porter.",
         )
+    described = ", ".join(describe_address(addr) for addr in exposed)
     return Finding(
         check="lyttende sockets",
         ok=False,
         detail=(
-            f"Eksponert mot LAN: {', '.join(exposed)}. "
-            "Kjør `pless harden` for å binde SSH til tailscale0."
+            f"Eksponert mot LAN: {described}. Kjør `pless harden` for å binde SSH til tailscale0."
         ),
     )
 

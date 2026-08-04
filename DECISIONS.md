@@ -61,8 +61,14 @@ Det endrer #12/#13 (som forutsatte SD + separat minnepinne).
 | 34 | Produktmål | `pless` skal bli et produkt som promoteres på egen nettside og kan installeres av andre. Navnet `pless` er ledig på PyPI (verifisert 2026-08-02) | Hever #20 fra «senere» til førsteklasses mål. Påvirker: lave maskinvarekrav (#22), begge distroer (#27), og web-klargjøring (#35) |
 | 35 | Web-klargjøring | Kjernemodulene (`storage`, `deploy`, `bootstrap`, `docscan`, `audit`, `tailscale`) importerer verken `typer` eller `rich` og returnerer dataklasser; `cli.py` er eneste presentasjonslag. Nye kommandoer får `--json`, og alt som spør om hemmeligheter må ha en ikke-interaktiv vei | Et web-grensesnitt skal kunne drive CLI-et under panseret. Seamen fantes allerede — den er nå et krav, ikke en tilfeldighet |
 
+| 36 | Docker-pakker per distro | `hostspec.packages_for()` gaffler: Debian → `docker-cli` + `docker-compose`, Ubuntu → `docker-compose-v2`. Verifisert empirisk, ikke fra dokumentasjon | Nettsøk påsto at `docker-compose-v2` fantes i Debian 13 — det gjør den ikke; Compose v2 heter der `docker-compose` (v2.26.1). Debian skiller dessuten klienten ut i `docker-cli`, som kun er en Recommends, og vi bruker `--no-install-recommends`. Begge feilene ga en tilsynelatende vellykket bootstrap med daemon uten `docker`-kommando |
+| 37 | Vent på apt-låsen | Bootstrap venter på `cloud-init status --wait` og setter `DPkg::Lock::Timeout=300` | En fersk maskin kjører cloud-init eller unattended-upgrades ved første boot. Uten dette feiler bootstrap med «Could not get lock» — og det ville truffet Pi-en like hardt som VM-en |
+
 ## Åpne punkter
 
+- **Neste store steg: installere på Kenneths Pi 5.** Krever at han er til stede (flashing med skjerm/tastatur). Guide: `docs/pi-oppsett.md`.
+- Import- og backup-fasene er ikke bygget ennå — arkivet finnes ikke før de er det.
+- `TS_AUTHKEY` mangler, så `pless tailscale up` og `pless harden` er ikke live-testet; koden er enhetstestet.
 - Konverteringspipeline for `.enex` — venter på resultat av `pless docs scan` mot ekte data.
 - Eksakt Pi-modell/RAM bekreftes med `cat /proc/device-tree/model` og `free -h` før bootstrap.
 - Varslingskanal (healthchecks.io vs ntfy vs e-post) — mønsteret er dead-man-ping; kanal velges ved implementasjon.

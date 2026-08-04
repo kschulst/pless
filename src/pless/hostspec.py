@@ -27,6 +27,14 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:30";
 """
 
+# LLMNR (port 5355) lytter på alle interfacer og er en kjent angrepsvektor
+# (navneforgiftning på LAN). Vi har ingen bruk for det. mDNS (5353) røres
+# bevisst IKKE — «vertsnavn.local» er dokumentert i førstegangsoppsettet.
+RESOLVED_HARDENING = """\
+[Resolve]
+LLMNR=no
+"""
+
 PACKAGES = [
     "docker.io",
     "ufw",
@@ -138,6 +146,12 @@ chmod 644 /etc/ssh/sshd_config.d/60-pless.conf
 cat > /etc/apt/apt.conf.d/52pless-auto-reboot <<'PLESS_EOF'
 {UNATTENDED_AUTO_REBOOT}PLESS_EOF
 chmod 644 /etc/apt/apt.conf.d/52pless-auto-reboot
+
+mkdir -p /etc/systemd/resolved.conf.d
+cat > /etc/systemd/resolved.conf.d/60-pless.conf <<'PLESS_EOF'
+{RESOLVED_HARDENING}PLESS_EOF
+chmod 644 /etc/systemd/resolved.conf.d/60-pless.conf
+systemctl restart systemd-resolved 2>/dev/null || true
 
 usermod -aG docker {admin_user}
 ufw allow OpenSSH
