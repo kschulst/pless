@@ -45,6 +45,9 @@ uv run pless docs estimate ~/Dropbox/dokumenter --local-only
 | `pless init [--secrets]` | Opprett `.env`, generer secrets |
 | `pless doctor` | Sjekk lokalt miljø for aktivt target |
 | `pless bootstrap` | Applisér host-spec over SSH på en booted maskin (Pi etter Network Install) |
+| `pless tailscale up` / `tailscale status` | Meld targetet inn i tailnetet (velges av `TS_AUTHKEY`) |
+| `pless harden --confirm` | Steng SSH mot LAN — kun `tailscale0` slipper inn etterpå |
+| `pless audit [--json]` | Verifiser eksponering; exit ≠ 0 ved avvik |
 | `pless vm create` / `vm destroy --confirm` | Dev-VM via Multipass, provisjonert med felles cloud-init host-spec |
 | `pless storage init --confirm` | LUKS2-formater datadisken (cipher autodetekteres: AES på Pi 5, Adiantum på Pi 4) |
 | `pless storage status` | LUKS/mount-status på target |
@@ -84,10 +87,41 @@ uv run ruff format . # format
 6. **Senere**: Dropbox `paperless-inbox/` → `processed/`-sync, Tang-auto-opplåsing,
    Hetzner-target reaktiveres, delbart image/veiviser
 
+## Støttede plattformer
+
+| Target | OS | Provisjonering | Status |
+|--------|----|----------------|--------|
+| `pi` | Raspberry Pi OS Trixie (anbefalt) eller Ubuntu Server 24.04+, arm64 | SSH-bootstrap | Guide klar, venter på maskinvare |
+| `vm` (lima) | Debian 13 | SSH-bootstrap | ✅ E2E-verifisert |
+| `vm` (multipass) | Ubuntu 24.04 | cloud-init | ✅ E2E-verifisert |
+| `hetzner` | Debian 13 | cloud-init | Kode + enhetstester, ikke live-testet |
+
+Debian og Ubuntu er likestilt — begge valideres. Docker-pakkene heter ulikt på de
+to (`docker-compose` vs `docker-compose-v2`, og Debian skiller ut `docker-cli`);
+`hostspec.packages_for()` er det ene stedet den forskjellen finnes.
+
 ## Sikkerhetsnotater
 
+To angripere, to forsvar:
+
+**Maskinen blir stjålet.** All data ligger på en LUKS2-kryptert enhet. Nøkkelen
+finnes aldri på boksen — den tastes med `pless unlock` etter hver boot, og
+`paperless.service` kan ikke starte mot en låst disk. Cipher autodetekteres:
+AES-XTS der CPU-en har AES-instruksjoner (Pi 5, x86), Adiantum ellers (Pi 4).
+
+**Angriperen er på nettverket ditt** (kompromittert wifi, IoT-enhet, gjest).
+Etter `pless harden` lytter ingenting mot LAN: Paperless er bundet til
+`127.0.0.1`, Postgres/Redis/Gotenberg/Tika publiserer ingen host-porter, og SSH
+slipper kun inn via `tailscale0`. `pless audit` verifiserer dette og feiler med
+exit-kode hvis noe har sklidd ut — særlig **Docker/UFW-fella**: Docker skriver
+egne iptables-regler forbi UFW, så en port publisert uten `127.0.0.1:`-prefiks
+blir LAN-synlig selv om brannmuren sier deny.
+
+Ellers:
+
 - Ingen secrets i git — `.env` er gitignored, Bitwarden er source of truth.
-- Serveren eksponerer kun port 22 (og Tailscale sin UDP-trafikk); Paperless er aldri
-  bundet til offentlig IP.
-- Destruktive kommandoer (destroy, wipe, db-reset) kommer til å kreve eksplisitt
-  `--confirm` + interaktiv bekreftelse med servernavn.
+- Hemmeligheter (LUKS-passphrase, Tailscale-nøkkel) går på stdin, aldri i argv
+  der enhver lokal bruker kunne lest dem med `ps`.
+- SSH er nøkkelbasert; passordinnlogging er avslått av bootstrap.
+- Destruktive kommandoer (`vm destroy`, `storage init`, `harden`) krever
+  eksplisitt `--confirm`, og flere krever at du skriver navnet på det som slettes.

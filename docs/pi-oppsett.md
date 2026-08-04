@@ -55,13 +55,17 @@ I Imager velger du:
 | Felt | Verdi |
 |------|-------|
 | Device | Din Pi-modell |
-| Operating System | **Other general-purpose OS → Ubuntu → Ubuntu Server 24.04 LTS (64-bit)** |
+| Operating System | **Raspberry Pi OS (other) → Raspberry Pi OS Lite (64-bit)** |
 | Storage | Mediet du skal boote fra (kontroller nøye at det er riktig enhet) |
 
-**Ikke** velg Raspberry Pi OS. Ubuntu Server 24.04 arm64 er nøyaktig samme OS,
-arkitektur og container-images som hele stacken er testet mot i dev-VM-en —
-Raspberry Pi OS ville betydd revalidering av alt uten gevinst. Sjekk at valget
-er **64-bit**; 32-bit gir en Pi som ikke kan kjøre Paperless-ngx i det hele tatt.
+**Velg 64-bit.** 32-bit gir en Pi som ikke kan kjøre Paperless-ngx i det hele
+tatt — den bygges ikke lenger for 32-bit ARM, og `pless bootstrap` avviser det.
+
+Raspberry Pi OS (Trixie, Debian 13) er anbefalt **på Pi-maskinvare**, fordi Pi
+Foundations egen kernel får fikser for Pi-spesifikk maskinvare først — det
+gjelder blant annet NVMe- og PCIe-feilene som har plaget Ubuntu på Pi 5.
+Ubuntu Server 24.04/26.04 arm64 er også fullt støttet av `pless`; begge
+distroer valideres likt. Se [DECISIONS.md](../DECISIONS.md) #27.
 
 Bruker du et kabinett med aktiv vifte: på Pi 5 styres vifter på 4-pins-headeren
 av firmware direkte (gjelder bl.a. Argon NEO 5), så leverandørens kontrollscript
@@ -116,8 +120,15 @@ pless doctor                      # skal bli helgrønn med target=pi
 pless bootstrap                   # Docker, UFW, fail2ban, SSH-hardening, auto-oppdatering
 pless storage init --confirm      # LUKS2 (AES-XTS på Pi 5), ext4, montert på /opt/paperless
 pless deploy paperless            # hele Paperless-stacken
+pless tailscale up                # meld boksen inn i tailnetet (krever TS_AUTHKEY)
+pless harden --confirm            # steng SSH mot LAN — kun tailnetet slipper inn
+pless audit                       # verifiser at ingenting er eksponert
 pless tunnel                      # http://localhost:8000
 ```
+
+Rekkefølgen på de tre siste er ikke tilfeldig: `harden` nekter å kjøre før
+Tailscale er verifisert oppe, slik at du ikke kan stenge deg selv ute. Går
+tailnetet likevel tapt, kommer du inn med skjerm og tastatur på maskinen.
 
 `pless bootstrap` skriver ut vertsnavn, modell, OS, arkitektur og RAM før den
 endrer noe — verifiser at vertsnavnet er maskinen du tror, og at det står
@@ -136,3 +147,22 @@ pless unlock      # låser opp OG starter stacken
 
 Dette er tyverisikringen som virker: stjeles Pi-en, er NVMe-innholdet uleselig,
 og `paperless.service` kan ikke starte mot en låst disk.
+
+## 6. Sikkerhetsmodellen, kort
+
+To ulike angripere, to ulike forsvar:
+
+**Noen stjeler maskinen.** Dataene ligger på en LUKS2-kryptert enhet, og
+nøkkelen finnes aldri på boksen — den tastes inn med `pless unlock` etter hver
+boot. En tyv får maskinvare og et OS, ikke dokumenter.
+
+**Noen er på nettverket ditt** (kompromittert wifi, en IoT-dings, en gjest).
+Etter `pless harden` lytter ingenting mot LAN-et: Paperless er bundet til
+`127.0.0.1`, databasen og de øvrige tjenestene publiserer ingen host-porter i
+det hele tatt, og SSH slipper kun inn via `tailscale0`. `pless audit` verifiserer
+alt dette og avslutter med feilkode hvis noe har sklidd ut — kjør den etter
+enhver endring i compose-oppsettet.
+
+Den viktigste fella `audit` vokter: **Docker skriver egne iptables-regler forbi
+UFW.** Publiserer noen en port uten `127.0.0.1:`-prefiks, blir den synlig på
+LAN-et selv om UFW sier deny, og brannmuren din lyver til deg.
