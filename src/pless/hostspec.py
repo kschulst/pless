@@ -24,6 +24,8 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:30";
 """
 
+# Identiske pakkenavn på Debian 13 og Ubuntu 24.04+. Holdes som funksjon fordi
+# distroene kan divergere senere — da er dette det ene stedet å gaffle.
 PACKAGES = [
     "docker.io",
     "docker-compose-v2",
@@ -35,6 +37,10 @@ PACKAGES = [
 ]
 
 
+def packages_for(distro_id: str = "debian") -> list[str]:
+    return list(PACKAGES)
+
+
 def read_pubkey(private_key_path: Path) -> str:
     pub_path = Path(str(private_key_path) + ".pub")
     if not pub_path.is_file():
@@ -42,12 +48,14 @@ def read_pubkey(private_key_path: Path) -> str:
     return pub_path.read_text().strip()
 
 
-def build_user_data(ssh_pubkey: str, timezone: str, admin_user: str = "ubuntu") -> dict:
+def build_user_data(
+    ssh_pubkey: str, timezone: str, admin_user: str = "ubuntu", distro_id: str = "debian"
+) -> dict:
     return {
         "timezone": timezone,
         "package_update": True,
         "package_upgrade": True,
-        "packages": list(PACKAGES),
+        "packages": packages_for(distro_id),
         "ssh_authorized_keys": [ssh_pubkey],
         "write_files": [
             {
@@ -77,14 +85,16 @@ def render_user_data(ssh_pubkey: str, timezone: str, admin_user: str = "ubuntu")
     return "#cloud-config\n" + yaml.safe_dump(spec, sort_keys=False, width=120)
 
 
-def render_bootstrap_script(timezone: str, admin_user: str = "ubuntu") -> str:
+def render_bootstrap_script(
+    timezone: str, admin_user: str = "ubuntu", distro_id: str = "debian"
+) -> str:
     """Samme spec som cloud-init, men som idempotent shell-script over SSH.
 
     Brukes når targetet allerede er booted og vi aldri rørte boot-partisjonen —
     typisk Pi etter Network Install (beslutning #18: felles spec, adapter per target).
     authorized_keys røres bevisst ikke: kommer vi inn over SSH, virker nøkkelen alt.
     """
-    packages = " ".join(PACKAGES)
+    packages = " ".join(packages_for(distro_id))
     return f"""#!/bin/sh
 set -eu
 export DEBIAN_FRONTEND=noninteractive

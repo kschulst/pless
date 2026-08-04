@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import json
 import subprocess
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ class TargetHost:
     user: str
     host: str
     key: Path
+    port: int = 22
 
 
 def parse_multipass_ip(info_json: str, name: str) -> str:
@@ -34,6 +36,48 @@ def parse_multipass_ip(info_json: str, name: str) -> str:
     if not ipv4:
         raise TargetError(f"VM-en {name!r} har ingen IPv4 ennå.")
     return ipv4[0]
+
+
+def parse_lima_instance(list_json: str, name: str) -> tuple[str, int]:
+    """Hent (bruker, ssh-port) fra `limactl list --format json`.
+
+    Lima kjører VM-en bak port-forwarding på 127.0.0.1, ikke på egen IP.
+    Utdata er én JSON-linje per instans.
+    """
+    for line in list_json.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if data.get("name") != name:
+            continue
+        if data.get("status") != "Running":
+            raise TargetError(
+                f"Lima-VM-en {name!r} er ikke Running (status: {data.get('status')})."
+            )
+        port = data.get("sshLocalPort")
+        if not port:
+            raise TargetError(f"Lima-VM-en {name!r} har ingen SSH-port ennå.")
+        return data.get("config", {}).get("user", {}).get("name") or getpass.getuser(), int(port)
+    raise TargetError(f"Lima kjenner ikke VM-en {name!r}.")
+
+
+def _lima_list() -> str:
+    completed = subprocess.run(
+        ["limactl", "list", "--format", "json"], capture_output=True, text=True
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise TargetError(f"`limactl list` feilet: {detail}")
+    return completed.stdout
+
+
+def lima_identity_file() -> Path:
+    """Lima genererer sin egen nøkkel; den virker alltid mot lima-VM-er."""
+    return Path.home() / ".lima" / "_config" / "user"
 
 
 def _multipass_info(name: str) -> str:
@@ -51,6 +95,15 @@ def _multipass_info(name: str) -> str:
 def resolve_target(cfg: config.Config, secrets: config.Secrets) -> TargetHost:
     target_type = cfg.target.type
     if target_type == "vm":
+        if cfg.vm.backend == "lima":
+            user, port = parse_lima_instance(_lima_list(), cfg.vm.name)
+            return TargetHost(
+                name=cfg.vm.name,
+                user=user,
+                host="127.0.0.1",
+                key=lima_identity_file(),
+                port=port,
+            )
         ip = parse_multipass_ip(_multipass_info(cfg.vm.name), cfg.vm.name)
         return TargetHost(name=cfg.vm.name, user="ubuntu", host=ip, key=cfg.ssh.key)
     if target_type == "pi":

@@ -64,10 +64,15 @@ class StorageStatus:
 
 
 def _run(target: TargetHost, command: str, input_text: str | None = None) -> sshexec.SshResult:
-    result = sshexec.run(
-        target.user, target.host, target.key, command, timeout=120, input_text=input_text
+    return sshexec.run(
+        target.user,
+        target.host,
+        target.key,
+        command,
+        timeout=120,
+        input_text=input_text,
+        port=target.port,
     )
-    return result
 
 
 def _run_ok(target: TargetHost, command: str, input_text: str | None = None) -> str:

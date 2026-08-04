@@ -156,11 +156,13 @@ def doctor() -> None:
 
     console.print(f"\nAktivt target: [bold]{cfg.target.type}[/bold]")
     if cfg.target.type == "vm":
-        check(
-            shutil.which("multipass") is not None,
-            "multipass er installert",
-            "kjør `! brew install --cask multipass --yes`",
+        tool = "limactl" if cfg.vm.backend == "lima" else "multipass"
+        hint = (
+            "kjør `brew install lima`"
+            if cfg.vm.backend == "lima"
+            else "kjør `! brew install --cask multipass --yes`"
         )
+        check(shutil.which(tool) is not None, f"{tool} er installert ({cfg.vm.backend})", hint)
     elif cfg.target.type == "pi":
         check(bool(cfg.pi.host), "[pi] host er satt i pless.toml")
         if cfg.pi.data_mode == "partition":
@@ -319,7 +321,7 @@ def _resolve_target(cfg: config.Config) -> targets.TargetHost:
 
 def _remote_df(cfg: config.Config, mount: str = "/") -> diskcheck.DiskSnapshot:
     target = _resolve_target(cfg)
-    result = sshexec.run(target.user, target.host, target.key, f"df -Pk {mount}")
+    result = sshexec.run(target.user, target.host, target.key, f"df -Pk {mount}", port=target.port)
     if not result.ok:
         _fail(f"SSH/df feilet mot {target.host}: {result.stderr.strip()}")
     return diskcheck.parse_df_output(result.stdout)
@@ -344,13 +346,15 @@ def server_status() -> None:
     cfg = config.load_config()
     if cfg.target.type == "vm":
         try:
-            vm.require_multipass()
-            data = vm.info(cfg.vm.name)
+            vm.require_backend(cfg.vm.backend)
+            data = vm.info(cfg.vm)
         except vm.VmError as exc:
             _fail(str(exc))
             return
-        ipv4 = ", ".join(data.get("ipv4") or ["-"])
-        console.print(f"{cfg.vm.name}: [bold]{data.get('state')}[/bold], IPv4 {ipv4}")
+        addresses = ", ".join(data["addresses"] or ["-"])
+        console.print(
+            f"{cfg.vm.name} ({cfg.vm.backend}): [bold]{data['state']}[/bold], {addresses}"
+        )
         return
     if cfg.target.type == "hetzner":
         sec = config.load_secrets()
@@ -368,7 +372,7 @@ def server_status() -> None:
         )
         return
     target = _resolve_target(cfg)
-    result = sshexec.run(target.user, target.host, target.key, "uptime")
+    result = sshexec.run(target.user, target.host, target.key, "uptime", port=target.port)
     if result.ok:
         console.print(f"{target.name} ({target.host}): oppe — {result.stdout.strip()}")
     else:
@@ -381,46 +385,60 @@ def ssh() -> None:
     cfg = config.load_config()
     target = _resolve_target(cfg)
     raise typer.Exit(
-        subprocess.call(["ssh", "-i", str(target.key), f"{target.user}@{target.host}"])
+        subprocess.call(
+            [
+                "ssh",
+                "-p",
+                str(target.port),
+                "-i",
+                str(target.key),
+                f"{target.user}@{target.host}",
+            ]
+        )
     )
 
 
 @vm_app.command("create")
 def vm_create() -> None:
-    """Opprett dev-VM-en med samme cloud-init host-spec som Pi/Hetzner får."""
+    """Opprett dev-VM-en. lima → Debian 13 + bootstrap, multipass → Ubuntu + cloud-init."""
     cfg = config.load_config()
     try:
-        vm.require_multipass()
+        vm.require_backend(cfg.vm.backend)
     except vm.VmError as exc:
         _fail(str(exc))
-    if vm.exists(cfg.vm.name):
+    if vm.exists(cfg.vm):
         console.print(f"[yellow]•[/yellow] VM-en {cfg.vm.name!r} finnes allerede.")
         return
 
-    try:
-        pubkey = hostspec.read_pubkey(cfg.ssh.key)
-    except FileNotFoundError as exc:
-        _fail(str(exc))
-        return
-    user_data = hostspec.render_user_data(pubkey, cfg.paperless.timezone)
+    user_data_path: Path | None = None
+    if cfg.vm.backend == "multipass":
+        try:
+            pubkey = hostspec.read_pubkey(cfg.ssh.key)
+        except FileNotFoundError as exc:
+            _fail(str(exc))
+            return
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            f.write(hostspec.render_user_data(pubkey, cfg.paperless.timezone))
+            user_data_path = Path(f.name)
 
-    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        f.write(user_data)
-        user_data_path = Path(f.name)
     console.print(
-        f"Oppretter {cfg.vm.name} ({cfg.vm.cpus} vCPU, {cfg.vm.memory}, {cfg.vm.disk}) — "
-        "første gang lastes Ubuntu-imaget ned, dette kan ta noen minutter …"
+        f"Oppretter {cfg.vm.name} via {cfg.vm.backend} "
+        f"({cfg.vm.cpus} vCPU, {cfg.vm.memory}, {cfg.vm.disk}) — "
+        "første gang lastes imaget ned, dette kan ta noen minutter …"
     )
     try:
         vm.launch(cfg.vm, user_data_path)
     except vm.VmError as exc:
         _fail(str(exc))
     finally:
-        user_data_path.unlink(missing_ok=True)
-    data = vm.info(cfg.vm.name)
+        if user_data_path:
+            user_data_path.unlink(missing_ok=True)
+
+    data = vm.info(cfg.vm)
+    next_step = "pless bootstrap" if cfg.vm.backend == "lima" else "pless storage init --confirm"
     console.print(
-        f"[green]✓[/green] {cfg.vm.name} er oppe: {', '.join(data.get('ipv4') or [])}. "
-        "Neste: [bold]pless storage init --confirm[/bold]"
+        f"[green]✓[/green] {cfg.vm.name} er oppe: {', '.join(data['addresses'])}. "
+        f"Neste: [bold]{next_step}[/bold]"
     )
 
 
@@ -436,7 +454,7 @@ def vm_destroy(
     if typed != cfg.vm.name:
         _fail("Navnet stemte ikke — avbryter.")
     try:
-        vm.delete(cfg.vm.name)
+        vm.delete(cfg.vm)
     except vm.VmError as exc:
         _fail(str(exc))
     console.print(f"[green]✓[/green] {cfg.vm.name} er slettet.")
@@ -622,6 +640,8 @@ def tunnel() -> None:
         subprocess.call(
             [
                 "ssh",
+                "-p",
+                str(target.port),
                 "-i",
                 str(target.key),
                 "-L",

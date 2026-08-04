@@ -23,9 +23,7 @@ class SshResult:
         return self.exit_code == 0
 
 
-def ssh_command(
-    user: str, host: str, key: Path, remote_command: str, port: int = 22
-) -> list[str]:
+def ssh_command(user: str, host: str, key: Path, remote_command: str, port: int = 22) -> list[str]:
     return [
         "ssh",
         "-o",

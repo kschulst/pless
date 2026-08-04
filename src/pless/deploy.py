@@ -19,7 +19,13 @@ def _run(
     target: TargetHost, command: str, input_text: str | None = None, timeout: int = 120
 ) -> sshexec.SshResult:
     return sshexec.run(
-        target.user, target.host, target.key, command, timeout=timeout, input_text=input_text
+        target.user,
+        target.host,
+        target.key,
+        command,
+        timeout=timeout,
+        input_text=input_text,
+        port=target.port,
     )
 
 
