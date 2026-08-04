@@ -11,6 +11,9 @@ from pathlib import Path
 
 import yaml
 
+# apt venter selv på låsen i stedet for å feile med «Could not get lock».
+APT_LOCK_TIMEOUT_SECONDS = 300
+
 SSHD_HARDENING = """\
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -24,11 +27,8 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "04:30";
 """
 
-# Identiske pakkenavn på Debian 13 og Ubuntu 24.04+. Holdes som funksjon fordi
-# distroene kan divergere senere — da er dette det ene stedet å gaffle.
 PACKAGES = [
     "docker.io",
-    "docker-compose-v2",
     "ufw",
     "fail2ban",
     "unattended-upgrades",
@@ -36,9 +36,29 @@ PACKAGES = [
     "curl",
 ]
 
+# Docker-pakkene divergerer mellom distroene — begge verifisert empirisk, og
+# ingen av dem trenger Dockers eget apt-repo:
+#
+#   Debian 13:   Compose v2 heter «docker-compose» (v2.26.1; «docker-compose-v2»
+#                finnes ikke). Klienten er skilt ut i «docker-cli», som bare er
+#                en Recommends av docker.io — og vi installerer med
+#                --no-install-recommends, så den må listes eksplisitt.
+#   Ubuntu 24.04+: Compose v2 heter «docker-compose-v2» («docker-compose» er
+#                den utdaterte Python-v1-en). Klienten følger med docker.io.
+DISTRO_PACKAGES = {
+    "debian": ["docker-cli", "docker-compose"],
+    "ubuntu": ["docker-compose-v2"],
+}
+
 
 def packages_for(distro_id: str = "debian") -> list[str]:
-    return list(PACKAGES)
+    extras = DISTRO_PACKAGES.get(distro_id)
+    if extras is None:
+        raise ValueError(
+            f"Vet ikke hvilke docker-pakker {distro_id!r} bruker "
+            f"(kjenner: {', '.join(DISTRO_PACKAGES)})."
+        )
+    return [*PACKAGES, *extras]
 
 
 def read_pubkey(private_key_path: Path) -> str:
@@ -99,10 +119,17 @@ def render_bootstrap_script(
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 
+# En fersk maskin kjører gjerne cloud-init eller unattended-upgrades ved
+# første boot. Uten dette kolliderer vi med apt-låsen og feiler.
+if command -v cloud-init >/dev/null 2>&1; then
+  cloud-init status --wait >/dev/null 2>&1 || true
+fi
+APT="apt-get -o DPkg::Lock::Timeout={APT_LOCK_TIMEOUT_SECONDS}"
+
 timedatectl set-timezone {timezone}
 
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends {packages}
+$APT update -qq
+$APT install -y -qq --no-install-recommends {packages}
 
 cat > /etc/ssh/sshd_config.d/60-pless.conf <<'PLESS_EOF'
 {SSHD_HARDENING}PLESS_EOF

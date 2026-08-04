@@ -1,7 +1,7 @@
 import pytest
 
 from pless.bootstrap import BootstrapError, parse_facts
-from pless.hostspec import render_bootstrap_script
+from pless.hostspec import packages_for, render_bootstrap_script
 
 
 def facts_output(
@@ -108,12 +108,38 @@ def test_bootstrap_script_matches_cloud_init_spec() -> None:
     assert "ufw --force enable" in script
 
 
-def test_bootstrap_script_is_identical_across_supported_distros() -> None:
-    # Pakkenavnene er like på Debian 13 og Ubuntu 24.04+; divergerer de senere,
-    # skal denne testen feile og tvinge frem en bevisst gaffel i packages_for().
-    assert render_bootstrap_script("Europe/Oslo", "u", "debian") == render_bootstrap_script(
-        "Europe/Oslo", "u", "ubuntu"
-    )
+def test_docker_packages_differ_between_distros() -> None:
+    # Verifisert empirisk på ekte VM-er, ikke antatt fra dokumentasjon.
+    debian = packages_for("debian")
+    ubuntu = packages_for("ubuntu")
+
+    # Debian: Compose v2 heter «docker-compose»; «docker-compose-v2» finnes ikke.
+    assert "docker-compose" in debian
+    assert "docker-compose-v2" not in debian
+    # Debian skiller ut klienten, og den er kun en Recommends — vi bruker
+    # --no-install-recommends, så uten denne får man daemon uten `docker`.
+    assert "docker-cli" in debian
+
+    # Ubuntu: motsatt navn, og klienten følger med docker.io.
+    assert "docker-compose-v2" in ubuntu
+    assert "docker-compose" not in ubuntu
+
+    assert "docker.io" in debian and "docker.io" in ubuntu
+
+
+def test_unknown_distro_has_no_guessed_docker_packages() -> None:
+    with pytest.raises(ValueError, match="docker-pakker"):
+        packages_for("fedora")
+
+
+def test_bootstrap_script_waits_for_apt_lock() -> None:
+    # En fersk maskin kjører cloud-init/unattended-upgrades ved første boot;
+    # uten venting feiler bootstrap med «Could not get lock».
+    script = render_bootstrap_script("Europe/Oslo")
+    assert "cloud-init status --wait" in script
+    assert "DPkg::Lock::Timeout=300" in script
+    # Ingen bare apt-get-kall utenom via $APT-variabelen.
+    assert "\napt-get " not in script
 
 
 def test_bootstrap_script_never_touches_authorized_keys() -> None:
