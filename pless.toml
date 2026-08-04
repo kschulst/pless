@@ -28,6 +28,12 @@ server_name = "paperless-01"
 user = "root"
 key_path = "~/.ssh/id_ed25519"
 
+[tailscale]
+# Tailnetet velges av TS_AUTHKEY i .env — én nøkkel hører til ett tailnet.
+# Har du flere tailnets (jobb/privat), styrer du valget ved hvilken nøkkel du bruker.
+login_server = ""     # tom = Tailscales kontrollplan; sett URL for selvhostet Headscale
+hostname = ""         # tom = bruk maskinens eget vertsnavn
+
 [access]
 # "tailscale": Paperless bindes til localhost, eksponeres via `tailscale serve` på tailnet.
 # "ssh-tunnel": ingen tailscale; tilgang via `pless tunnel` (ssh -L).

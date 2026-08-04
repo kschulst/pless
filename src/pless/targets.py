@@ -65,14 +65,28 @@ def parse_lima_instance(list_json: str, name: str) -> tuple[str, int]:
     raise TargetError(f"Lima kjenner ikke VM-en {name!r}.")
 
 
-def _lima_list() -> str:
-    completed = subprocess.run(
-        ["limactl", "list", "--format", "json"], capture_output=True, text=True
-    )
+_INSTALL_HINTS = {
+    "limactl": "Installer med `brew install lima`.",
+    "multipass": "Installer med `! brew install --cask multipass --yes`.",
+}
+
+
+def _run_tool(args: list[str]) -> str:
+    """Kjør et eksternt verktøy og gi en forklaring — ikke en traceback — når det mangler."""
+    tool = args[0]
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        hint = _INSTALL_HINTS.get(tool, "")
+        raise TargetError(f"{tool} finnes ikke i PATH. {hint}".strip()) from exc
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip()
-        raise TargetError(f"`limactl list` feilet: {detail}")
+        raise TargetError(f"`{' '.join(args)}` feilet: {detail}")
     return completed.stdout
+
+
+def _lima_list() -> str:
+    return _run_tool(["limactl", "list", "--format", "json"])
 
 
 def lima_identity_file() -> Path:
@@ -81,15 +95,7 @@ def lima_identity_file() -> Path:
 
 
 def _multipass_info(name: str) -> str:
-    completed = subprocess.run(
-        ["multipass", "info", name, "--format", "json"],
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise TargetError(f"`multipass info {name}` feilet: {detail}")
-    return completed.stdout
+    return _run_tool(["multipass", "info", name, "--format", "json"])
 
 
 def resolve_target(cfg: config.Config, secrets: config.Secrets) -> TargetHost:

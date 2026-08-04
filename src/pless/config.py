@@ -73,6 +73,14 @@ class AccessConfig(BaseModel):
     mode: str = "tailscale"  # "tailscale" | "ssh-tunnel"
 
 
+class TailscaleConfig(BaseModel):
+    # Hvilket tailnet boksen blir med i avgjøres av TS_AUTHKEY — én nøkkel
+    # hører til ett tailnet. Tom login_server = Tailscales egen kontrollplan;
+    # sett den til en Headscale-URL for selvhostet nett.
+    login_server: str = ""
+    hostname: str = ""  # tom = bruk maskinens eget vertsnavn
+
+
 class PaperlessConfig(BaseModel):
     version: str = "2.20.15"  # eksakt image-tag; bumpes bevisst (senere: `pless update`)
     timezone: str = "Europe/Oslo"
@@ -104,6 +112,7 @@ class BackupConfig(BaseModel):
 
 class Config(BaseModel):
     target: TargetConfig = TargetConfig()
+    tailscale: TailscaleConfig = TailscaleConfig()
     vm: VmConfig = VmConfig()
     pi: PiConfig = PiConfig()
     hetzner: HetznerConfig = HetznerConfig()

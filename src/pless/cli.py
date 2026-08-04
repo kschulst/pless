@@ -15,6 +15,7 @@ from rich.table import Table
 
 from pless import (
     __version__,
+    audit,
     bootstrap,
     composegen,
     config,
@@ -25,6 +26,7 @@ from pless import (
     hostspec,
     sshexec,
     storage,
+    tailscale,
     targets,
     vm,
 )
@@ -41,6 +43,7 @@ vm_app = typer.Typer(help="Lokal dev-VM via Multipass.", no_args_is_help=True)
 storage_app = typer.Typer(help="LUKS-kryptert datalagring på target.", no_args_is_help=True)
 deploy_app = typer.Typer(help="Deploy og drift av Paperless-stacken.", no_args_is_help=True)
 paperless_app = typer.Typer(help="Paperless-app-operasjoner.", no_args_is_help=True)
+tailscale_app = typer.Typer(help="Tailscale-tilgang til targetet.", no_args_is_help=True)
 app.add_typer(hetzner_app, name="hetzner")
 app.add_typer(docs_app, name="docs")
 app.add_typer(server_app, name="server")
@@ -48,6 +51,7 @@ app.add_typer(vm_app, name="vm")
 app.add_typer(storage_app, name="storage")
 app.add_typer(deploy_app, name="deploy")
 app.add_typer(paperless_app, name="paperless")
+app.add_typer(tailscale_app, name="tailscale")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -458,6 +462,115 @@ def vm_destroy(
     except vm.VmError as exc:
         _fail(str(exc))
     console.print(f"[green]✓[/green] {cfg.vm.name} er slettet.")
+
+
+@app.command("audit")
+def audit_cmd(
+    json_output: bool = typer.Option(False, "--json", help="Maskinlesbar output."),
+) -> None:
+    """Revider eksponering: hva kan noen på LAN-et ditt faktisk nå?"""
+    cfg = config.load_config()
+    target = _resolve_target(cfg)
+    result = sshexec.run(
+        target.user,
+        target.host,
+        target.key,
+        "sh -s",
+        timeout=120,
+        input_text=audit.COLLECT_SCRIPT,
+        port=target.port,
+    )
+    if not result.ok:
+        _fail(f"Innsamling feilet: {result.stderr.strip()}")
+    report = audit.analyse(result.stdout)
+
+    if json_output:
+        console.print_json(
+            data={
+                "ok": report.ok,
+                "findings": [
+                    {
+                        "check": f.check,
+                        "ok": f.ok,
+                        "severity": str(f.severity),
+                        "detail": f.detail,
+                    }
+                    for f in report.findings
+                ],
+            }
+        )
+    else:
+        for finding in report.findings:
+            mark = "[green]✓[/green]" if finding.ok else "[red]✗[/red]"
+            console.print(f"{mark} {finding.check}: {finding.detail}")
+
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+@tailscale_app.command("status")
+def tailscale_status() -> None:
+    """Vis Tailscale-status på targetet."""
+    cfg = config.load_config()
+    target = _resolve_target(cfg)
+    state = tailscale.status(target)
+    if not state.installed:
+        console.print(
+            "[yellow]•[/yellow] Tailscale er ikke installert — kjør `pless tailscale up`."
+        )
+        return
+    mark = "[green]✓[/green]" if state.is_up else "[red]✗[/red]"
+    console.print(f"{mark} {state.backend_state} — {state.hostname or '(uten navn)'}")
+    console.print(f"  Adresser: {', '.join(state.addresses) or '-'}")
+
+
+@tailscale_app.command("up")
+def tailscale_up() -> None:
+    """Installer Tailscale og meld targetet inn i tailnetet (velges av TS_AUTHKEY)."""
+    cfg = config.load_config()
+    sec = config.load_secrets()
+    target = _resolve_target(cfg)
+
+    state = tailscale.status(target)
+    if not state.installed:
+        console.print("Installerer Tailscale …")
+        try:
+            tailscale.install(target)
+        except tailscale.TailscaleError as exc:
+            _fail(str(exc))
+    try:
+        state = tailscale.up(cfg, target, sec.ts_authkey, cfg.tailscale.hostname)
+    except tailscale.TailscaleError as exc:
+        _fail(str(exc))
+        return
+    console.print(
+        f"[green]✓[/green] Med i tailnetet som [bold]{state.hostname}[/bold] "
+        f"({', '.join(state.addresses)})."
+    )
+    console.print("Neste: [bold]pless harden[/bold] for å stenge SSH mot LAN-et.")
+
+
+@app.command("harden")
+def harden_cmd(
+    confirm: bool = typer.Option(False, "--confirm", help="Bekreft at LAN-SSH stenges."),
+) -> None:
+    """Steng SSH mot LAN — kun tailnetet slipper inn etterpå."""
+    cfg = config.load_config()
+    target = _resolve_target(cfg)
+    if not confirm:
+        _fail(
+            "Dette stenger SSH for alt annet enn Tailscale. Mister du tailnet-tilgang, "
+            "kommer du bare inn med skjerm og tastatur på maskinen. Kjør igjen med --confirm."
+        )
+    try:
+        tailscale.harden(target)
+    except tailscale.TailscaleError as exc:
+        _fail(str(exc))
+        return
+    console.print(
+        "[green]✓[/green] SSH slipper nå kun inn via tailscale0. "
+        "Verifiser med [bold]pless audit[/bold]."
+    )
 
 
 @app.command("bootstrap")
