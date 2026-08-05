@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pless import config, hostspec, sshexec
-from pless.targets import TargetHost
+from pless.targets import Host
 
 # Distributions bootstrap is validated against, treated as equals: Debian via
 # Lima and Raspberry Pi OS, Ubuntu via Multipass and Hetzner.
@@ -34,6 +34,7 @@ class BootstrapError(RuntimeError):
 @dataclass
 class HostFacts:
     hostname: str
+    user: str
     model: str
     architecture: str
     distro_id: str
@@ -69,16 +70,15 @@ class HostFacts:
         return padded >= minimum
 
 
-def _run(target: TargetHost, command: str, timeout: int = 60) -> sshexec.SshResult:
-    return sshexec.run(
-        target.user, target.host, target.key, command, timeout=timeout, port=target.port
-    )
+def _run(target: Host, command: str, timeout: int = 60) -> sshexec.SshResult:
+    return sshexec.run(target.ssh_args, command, timeout=timeout)
 
 
 # Key=value rather than positional lines, so a missing or extra field does not
 # shift everything after it.
 _FACTS_SCRIPT = """\
 echo "hostname=$(hostname)"
+echo "user=$(whoami)"
 M=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\\0')
 echo "model=${M:-unknown}"
 echo "arch=$(uname -m)"
@@ -90,7 +90,7 @@ echo "mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
 """
 
 
-def gather_facts(target: TargetHost) -> HostFacts:
+def gather_facts(target: Host) -> HostFacts:
     """Read hardware and OS facts before changing anything."""
     result = _run(target, _FACTS_SCRIPT)
     if not result.ok:
@@ -105,13 +105,14 @@ def parse_facts(output: str) -> HostFacts:
         if sep:
             fields[key.strip()] = value.strip()
 
-    required = ("hostname", "arch", "distro_id", "mem_kb")
+    required = ("hostname", "user", "arch", "distro_id", "mem_kb")
     missing = [key for key in required if not fields.get(key)]
     if missing:
         raise BootstrapError(f"Missing facts {missing} in output: {output!r}")
 
     return HostFacts(
         hostname=fields["hostname"],
+        user=fields["user"],
         model=fields.get("model", "unknown"),
         architecture=fields["arch"],
         distro_id=fields["distro_id"].strip('"').lower(),
@@ -121,7 +122,7 @@ def parse_facts(output: str) -> HostFacts:
     )
 
 
-def apply(cfg: config.Config, target: TargetHost, facts: HostFacts | None = None) -> None:
+def apply(cfg: config.Config, target: Host, facts: HostFacts | None = None) -> None:
     """Run the host spec script. Idempotent — safe to run again."""
     facts = facts or gather_facts(target)
     if facts.architecture not in SUPPORTED_ARCHITECTURES:
@@ -138,18 +139,13 @@ def apply(cfg: config.Config, target: TargetHost, facts: HostFacts | None = None
             f"Bootstrap is validated against: {supported}."
         )
 
+    # The account we logged in as is the one that needs docker access —
+    # asked of the machine rather than assumed from configuration, so it holds
+    # however the connection was expressed.
     script = hostspec.render_bootstrap_script(
-        cfg.paperless.timezone, target.user, distro_id=facts.distro_id
+        cfg.paperless.timezone, facts.user, distro_id=facts.distro_id
     )
     # The script goes to `sh -s` on stdin; nothing lands in argv or a temp file.
-    result = sshexec.run(
-        target.user,
-        target.host,
-        target.key,
-        "sudo sh -s",
-        timeout=900,
-        input_text=script,
-        port=target.port,
-    )
+    result = sshexec.run(target.ssh_args, "sudo sh -s", timeout=900, input_text=script)
     if not result.ok:
         raise BootstrapError(f"Bootstrap failed: {result.stderr.strip() or result.stdout.strip()}")

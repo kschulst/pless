@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pless import config, sshexec
-from pless.targets import TargetHost
+from pless.targets import Host
 
 DATA_IMG = "/var/lib/pless/data.img"
 MAPPER_NAME = "paperless-data"
@@ -66,19 +66,11 @@ class StorageStatus:
     is_mounted: bool
 
 
-def _run(target: TargetHost, command: str, input_text: str | None = None) -> sshexec.SshResult:
-    return sshexec.run(
-        target.user,
-        target.host,
-        target.key,
-        command,
-        timeout=120,
-        input_text=input_text,
-        port=target.port,
-    )
+def _run(target: Host, command: str, input_text: str | None = None) -> sshexec.SshResult:
+    return sshexec.run(target.ssh_args, command, timeout=120, input_text=input_text)
 
 
-def _run_ok(target: TargetHost, command: str, input_text: str | None = None) -> str:
+def _run_ok(target: Host, command: str, input_text: str | None = None) -> str:
     result = _run(target, command, input_text)
     if not result.ok:
         raise StorageError(
@@ -87,21 +79,20 @@ def _run_ok(target: TargetHost, command: str, input_text: str | None = None) -> 
     return result.stdout.strip()
 
 
-def resolve_data_device(cfg: config.Config, target: TargetHost) -> str:
-    if cfg.target.type == "vm":
-        return _run_ok(target, _ENSURE_LOOP_DEVICE.format(size_gb=cfg.vm.data_size_gb))
-    if cfg.target.type == "pi":
-        if cfg.pi.data_mode == "file":
-            return _run_ok(target, _ENSURE_LOOP_DEVICE.format(size_gb=cfg.pi.data_size_gb))
-        if not cfg.pi.data_device:
-            raise StorageError(
-                '[pi] data_mode = "partition" requires data_device to be set in pless.toml.'
-            )
-        return cfg.pi.data_device
-    raise StorageError(f"Encrypted storage is not supported for target {cfg.target.type!r} yet.")
+def resolve_data_device(cfg: config.Config, target: Host) -> str:
+    """Where the encrypted volume lives: a loop-backed file, or a block device."""
+    if cfg.storage.data_mode == "file":
+        return _run_ok(target, _ENSURE_LOOP_DEVICE.format(size_gb=cfg.storage.data_size_gb))
+    if cfg.storage.data_mode == "partition":
+        if not cfg.storage.data_device:
+            raise StorageError('[storage] data_mode = "partition" requires data_device to be set.')
+        return cfg.storage.data_device
+    raise StorageError(
+        f"Unknown [storage] data_mode {cfg.storage.data_mode!r} (valid: file, partition)."
+    )
 
 
-def status(cfg: config.Config, target: TargetHost) -> StorageStatus:
+def status(cfg: config.Config, target: Host) -> StorageStatus:
     device = resolve_data_device(cfg, target)
     is_luks = _run(target, f"sudo cryptsetup isLuks {device}").ok
     is_open = _run(target, f"sudo cryptsetup status {MAPPER_NAME} >/dev/null 2>&1").ok
@@ -109,7 +100,7 @@ def status(cfg: config.Config, target: TargetHost) -> StorageStatus:
     return StorageStatus(device=device, is_luks=is_luks, is_open=is_open, is_mounted=is_mounted)
 
 
-def init(cfg: config.Config, target: TargetHost, passphrase: str) -> str:
+def init(cfg: config.Config, target: Host, passphrase: str) -> str:
     """Format the data volume as LUKS2 with ext4 and mount it. Destructive."""
     device = resolve_data_device(cfg, target)
     if _run(target, f"sudo cryptsetup isLuks {device}").ok:
@@ -133,7 +124,7 @@ def init(cfg: config.Config, target: TargetHost, passphrase: str) -> str:
     return device
 
 
-def unlock(cfg: config.Config, target: TargetHost, passphrase: str) -> StorageStatus:
+def unlock(cfg: config.Config, target: Host, passphrase: str) -> StorageStatus:
     device = resolve_data_device(cfg, target)
     current = status(cfg, target)
     if not current.is_luks:
@@ -152,7 +143,7 @@ def unlock(cfg: config.Config, target: TargetHost, passphrase: str) -> StorageSt
     return status(cfg, target)
 
 
-def lock(cfg: config.Config, target: TargetHost) -> StorageStatus:
+def lock(cfg: config.Config, target: Host) -> StorageStatus:
     _run(target, "sudo systemctl stop paperless.service 2>/dev/null || true")
     current = status(cfg, target)
     if current.is_mounted:

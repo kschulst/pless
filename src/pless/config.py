@@ -1,4 +1,10 @@
-"""Configuration: pless.toml (non-secret) plus .env and the environment (secrets)."""
+"""Configuration: pless.toml (non-secret) plus .env and the environment (secrets).
+
+`pless` configures and operates one thing: a host reachable over SSH. How that
+host came into existence — a Raspberry Pi you flashed, a VM on your hypervisor,
+a droplet you clicked into being, a machine `pless vm create` made for you — is
+a separate, optional concern. Only `[host]` describes what the tool needs.
+"""
 
 from __future__ import annotations
 
@@ -11,19 +17,77 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 CONFIG_FILENAME = "pless.toml"
 
 
-class TargetConfig(BaseModel):
-    type: str = "vm"  # "vm" | "pi" | "hetzner"
+class HostConfig(BaseModel):
+    """How to reach the machine. Everything else follows from this.
+
+    Two ways to say it. Either the connection details directly:
+
+        address = "archive.local"
+        user = "admin"
+
+    Or a reference to an SSH config file, which is what `pless vm create`
+    writes and what you want if your setup already involves a bastion, a
+    non-standard port, or anything else your ~/.ssh/config knows about:
+
+        ssh_config = "~/.lima/pless-dev/ssh.config"
+        ssh_alias = "lima-pless-dev"
+    """
+
+    address: str = ""
+    user: str = "root"
+    key_path: str = "~/.ssh/id_ed25519"
+    port: int = 22
+
+    ssh_config: str = ""
+    ssh_alias: str = ""
+
+    @property
+    def key(self) -> Path:
+        return Path(self.key_path).expanduser()
+
+    @property
+    def uses_ssh_config(self) -> bool:
+        return bool(self.ssh_config and self.ssh_alias)
+
+    @property
+    def is_configured(self) -> bool:
+        return self.uses_ssh_config or bool(self.address)
+
+    @property
+    def label(self) -> str:
+        """A short name for output, so people can tell machines apart."""
+        if self.uses_ssh_config:
+            return self.ssh_alias
+        return self.address or "(unconfigured)"
+
+
+class StorageConfig(BaseModel):
+    # "file": a LUKS file on the root filesystem. The default, because both
+    # Ubuntu and Raspberry Pi OS grow the root partition to fill the disk on
+    # first boot, leaving no free space to partition.
+    # "partition": an existing block device, such as a dedicated disk.
+    data_mode: str = "file"
+    data_size_gb: int = 100  # data_mode="file" only
+    data_device: str = ""  # data_mode="partition" only; use /dev/disk/by-id/...
+
+    min_free_gb_after_upload: int = 10
+    max_disk_usage_percent_after_upload: int = 70
 
 
 class VmConfig(BaseModel):
-    # "lima": Debian 13 provisioned by SSH bootstrap — mirrors a Pi
-    # "multipass": Ubuntu provisioned by cloud-init — mirrors Hetzner
+    """Optional: let pless create a local VM for you.
+
+    Not a kind of host — a way to obtain one. After `pless vm create`, the
+    machine is reached through `[host]` like any other.
+    """
+
+    # "lima": Debian provisioned by SSH bootstrap — mirrors a Pi
+    # "multipass": Ubuntu provisioned by cloud-init — mirrors a cloud server
     backend: str = "lima"
     name: str = "pless-dev"
     cpus: int = 2
     memory: str = "4G"
     disk: str = "20G"
-    data_size_gb: int = 5  # size of the loop file standing in for the data disk
 
     @property
     def memory_gb(self) -> int:
@@ -42,32 +106,17 @@ def _parse_size_gb(value: str) -> int:
     return int(digits)
 
 
-class PiConfig(BaseModel):
-    host: str = ""  # Tailscale name, mDNS name or IP address
-    user: str = "ubuntu"
-    # "file": a LUKS file on the root filesystem. The default, because both
-    # Ubuntu and Raspberry Pi OS grow the root partition to fill the disk on
-    # first boot, leaving no free space to partition.
-    # "partition": an existing block device, such as a dedicated disk.
-    data_mode: str = "file"
-    data_size_gb: int = 200  # data_mode="file" only
-    data_device: str = ""  # data_mode="partition" only; use /dev/disk/by-id/...
-
-
 class HetznerConfig(BaseModel):
+    """Optional: let pless create a Hetzner Cloud server for you.
+
+    Every other provider works too — create the machine however you like and
+    point `[host]` at it. This section only saves you that step.
+    """
+
     location: str = "hel1"
     server_type: str = "cx23"
     image: str = "debian-13"
     server_name: str = "paperless-01"
-
-
-class SshConfig(BaseModel):
-    user: str = "root"
-    key_path: str = "~/.ssh/id_ed25519"
-
-    @property
-    def key(self) -> Path:
-        return Path(self.key_path).expanduser()
 
 
 class AccessConfig(BaseModel):
@@ -102,27 +151,22 @@ class PathsConfig(BaseModel):
         return Path(self.local_backups).expanduser()
 
 
-class StorageConfig(BaseModel):
-    min_free_gb_after_upload: int = 10
-    max_disk_usage_percent_after_upload: int = 70
-
-
 class BackupConfig(BaseModel):
     restic_repository: str = ""
 
 
 class Config(BaseModel):
-    target: TargetConfig = TargetConfig()
+    host: HostConfig = HostConfig()
+    storage: StorageConfig = StorageConfig()
     tailscale: TailscaleConfig = TailscaleConfig()
-    vm: VmConfig = VmConfig()
-    pi: PiConfig = PiConfig()
-    hetzner: HetznerConfig = HetznerConfig()
-    ssh: SshConfig = SshConfig()
     access: AccessConfig = AccessConfig()
     paperless: PaperlessConfig = PaperlessConfig()
     paths: PathsConfig = PathsConfig()
-    storage: StorageConfig = StorageConfig()
     backup: BackupConfig = BackupConfig()
+
+    # Optional ways to obtain a host, rather than kinds of host.
+    vm: VmConfig = VmConfig()
+    hetzner: HetznerConfig = HetznerConfig()
 
 
 class Secrets(BaseSettings):

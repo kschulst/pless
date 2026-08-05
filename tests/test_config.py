@@ -36,8 +36,8 @@ def test_find_config_returns_none_when_absent(tmp_path: Path) -> None:
     assert find_config_file(start=tmp_path) is None
 
 
-def test_ssh_key_path_expands_home(tmp_path: Path) -> None:
+def test_host_key_path_expands_home(tmp_path: Path) -> None:
     config_file = tmp_path / "pless.toml"
-    config_file.write_text('[ssh]\nkey_path = "~/.ssh/test_key"\n')
+    config_file.write_text('[host]\nkey_path = "~/.ssh/test_key"\n')
     cfg = load_config(config_file)
-    assert "~" not in str(cfg.ssh.key)
+    assert "~" not in str(cfg.host.key)

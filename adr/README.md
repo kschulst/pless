@@ -26,6 +26,7 @@ which is for people *using* `pless`.
 | [0013](0013-backup-offsite-and-drilled.md) | Back up off-site, at a different provider, and drill the restore | Accepted |
 | [0014](0014-secrets-never-in-argv.md) | Pass secrets on stdin, never in argv | Accepted |
 | [0015](0015-documentation-drift-is-a-build-failure.md) | Documentation drift is a build failure | Accepted |
+| [0016](0016-there-is-only-a-host.md) | There is only a host; provisioning is a separate, optional step | Accepted |
 
 ## Writing a new one
 

@@ -23,6 +23,7 @@ from pless import (
     diskcheck,
     docscan,
     hetzner,
+    hostfile,
     hostspec,
     preflight,
     scaffold,
@@ -117,11 +118,11 @@ def init(
         else:
             console.print("[yellow]•[/yellow] All secrets were already set — generated nothing.")
 
-    cfg = config.load_config()
-    if cfg.target.type == "hetzner":
-        console.print("\nNext: put HCLOUD_TOKEN in .env, then run [bold]pless doctor[/bold].")
-    else:
-        console.print("\nNext: run [bold]pless doctor[/bold].")
+    console.print(
+        "\nNext: point [bold]\\[host][/bold] in pless.toml at a machine, or run "
+        "[bold]pless vm create[/bold] to have a local one made for you. "
+        "Then [bold]pless doctor[/bold]."
+    )
 
 
 @app.command()
@@ -152,45 +153,38 @@ def doctor() -> None:
     check(shutil.which("uv") is not None, "uv found in PATH", "https://docs.astral.sh/uv/")
     check(config.find_config_file() is not None, "pless.toml found")
     check(Path(".env").exists(), ".env exists", "run `pless init`")
+
+    console.print("\n[bold]Host[/bold]")
     check(
-        cfg.ssh.key.exists(),
-        f"SSH key found ({cfg.ssh.key})",
-        "generate one with ssh-keygen -t ed25519",
+        cfg.host.is_configured,
+        f"\\[host] points at {cfg.host.label}",
+        "set `address` and `user`, or run `pless vm create`",
     )
-
-    console.print(f"\nActive target: [bold]{cfg.target.type}[/bold]")
-    if cfg.target.type == "vm":
-        tool = "limactl" if cfg.vm.backend == "lima" else "multipass"
-        hint = (
-            "run `brew install lima`"
-            if cfg.vm.backend == "lima"
-            else "run `brew install --cask multipass`"
-        )
-        check(shutil.which(tool) is not None, f"{tool} is installed ({cfg.vm.backend})", hint)
-    elif cfg.target.type == "pi":
-        check(bool(cfg.pi.host), "[pi] host is set in pless.toml")
-        if cfg.pi.data_mode == "partition":
-            check(
-                bool(cfg.pi.data_device),
-                "[pi] data_device is set (required by data_mode=partition)",
-            )
-        else:
-            console.print(
-                f"[green]✓[/green] [pi] data_mode=file ({cfg.pi.data_size_gb} GB LUKS file)"
-            )
-    elif cfg.target.type == "hetzner":
+    if cfg.host.uses_ssh_config:
+        path = Path(cfg.host.ssh_config).expanduser()
+        check(path.is_file(), f"SSH config exists ({path})", "recreate the VM, or edit \\[host]")
+    elif cfg.host.address:
         check(
-            bool(sec.hcloud_token),
-            "HCLOUD_TOKEN is set",
-            "put it in .env; source of truth is your password manager",
+            cfg.host.key.exists(),
+            f"SSH key found ({cfg.host.key})",
+            "generate one with ssh-keygen -t ed25519",
         )
 
-    if cfg.access.mode == "tailscale" and cfg.target.type != "vm":
-        warn(
-            shutil.which("tailscale") is not None,
-            "tailscale CLI found locally",
-            "needed at deploy time — https://tailscale.com/download",
+    if cfg.storage.data_mode == "partition":
+        check(
+            bool(cfg.storage.data_device),
+            "\\[storage] data_device is set (required by data_mode=partition)",
         )
+    else:
+        console.print(
+            f"[green]✓[/green] \\[storage] data_mode=file ({cfg.storage.data_size_gb} GB LUKS file)"
+        )
+
+    warn(
+        shutil.which("tailscale") is not None,
+        "tailscale CLI found locally",
+        "needed at deploy time — https://tailscale.com/download",
+    )
     warn(
         bool(sec.paperless_admin_password),
         "Paperless secrets generated",
@@ -199,8 +193,7 @@ def doctor() -> None:
 
     if problems:
         _fail(f"{problems} problem(s) need fixing.")
-    next_step = "pless vm create" if cfg.target.type == "vm" else "pless server status"
-    console.print(f"\n[green bold]All clear.[/green bold] Next: [bold]{next_step}[/bold]")
+    console.print("\n[green bold]All clear.[/green bold] Next: [bold]pless bootstrap[/bold]")
 
 
 @hetzner_app.command("check-token")
@@ -319,19 +312,19 @@ def docs_estimate(
             )
 
 
-def _resolve_target(cfg: config.Config) -> targets.TargetHost:
+def _host(cfg: config.Config) -> targets.Host:
     try:
-        return targets.resolve_target(cfg, config.load_secrets())
-    except (targets.TargetError, ValueError) as exc:
+        return targets.resolve_host(cfg)
+    except targets.TargetError as exc:
         _fail(str(exc))
         raise  # unreachable; helps the type checker
 
 
 def _remote_df(cfg: config.Config, mount: str = "/") -> diskcheck.DiskSnapshot:
-    target = _resolve_target(cfg)
-    result = sshexec.run(target.user, target.host, target.key, f"df -Pk {mount}", port=target.port)
+    target = _host(cfg)
+    result = sshexec.run(target.ssh_args, f"df -Pk {mount}")
     if not result.ok:
-        _fail(f"SSH/df feilet mot {target.host}: {result.stderr.strip()}")
+        _fail(f"df over SSH failed against {target.label}: {result.stderr.strip()}")
     return diskcheck.parse_df_output(result.stdout)
 
 
@@ -339,10 +332,10 @@ def _remote_df(cfg: config.Config, mount: str = "/") -> diskcheck.DiskSnapshot:
 def server_df() -> None:
     """Show disk usage on the active target."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     snapshot = _remote_df(cfg)
     console.print(
-        f"{target.name} ({target.host}): {_human_size(snapshot.total_bytes)} total, "
+        f"{target.label}: {_human_size(snapshot.total_bytes)} total, "
         f"{_human_size(snapshot.used_bytes)} used ({snapshot.used_percent:.0f}%), "
         f"{_human_size(snapshot.avail_bytes)} free."
     )
@@ -350,112 +343,109 @@ def server_df() -> None:
 
 @server_app.command("status")
 def server_status() -> None:
-    """Show the status of the active target."""
+    """Show whether the configured host is reachable."""
     cfg = config.load_config()
-    if cfg.target.type == "vm":
-        try:
-            vm.require_backend(cfg.vm.backend)
-            data = vm.info(cfg.vm)
-        except vm.VmError as exc:
-            _fail(str(exc))
-            return
-        addresses = ", ".join(data["addresses"] or ["-"])
-        console.print(
-            f"{cfg.vm.name} ({cfg.vm.backend}): [bold]{data['state']}[/bold], {addresses}"
-        )
-        return
-    if cfg.target.type == "hetzner":
-        sec = config.load_secrets()
-        client = hetzner.make_client(sec.hcloud_token)
-        server = hetzner.get_server(client, cfg.hetzner.server_name)
-        if server is None:
-            console.print(f"[yellow]•[/yellow] No server named {cfg.hetzner.server_name!r} yet.")
-            return
-        console.print(
-            f"{server.name}: [bold]{server.status}[/bold], "
-            f"type {server.server_type.name}, {server.datacenter.name}, "
-            f"IPv4 {hetzner.server_ip(server)}"
-        )
-        return
-    target = _resolve_target(cfg)
-    result = sshexec.run(target.user, target.host, target.key, "uptime", port=target.port)
+    target = _host(cfg)
+    result = sshexec.run(target.ssh_args, "uptime")
     if result.ok:
-        console.print(f"{target.name} ({target.host}): up — {result.stdout.strip()}")
+        console.print(f"{target.label}: up — {result.stdout.strip()}")
     else:
-        console.print(f"[red]✗[/red] {target.name} ({target.host}): unreachable over SSH")
+        console.print(f"[red]✗[/red] {target.label}: unreachable over SSH")
 
 
 @app.command()
 def ssh() -> None:
     """Open an interactive SSH session on the active target."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
-    raise typer.Exit(
-        subprocess.call(
-            [
-                "ssh",
-                "-p",
-                str(target.port),
-                "-i",
-                str(target.key),
-                f"{target.user}@{target.host}",
-            ]
-        )
-    )
+    target = _host(cfg)
+    raise typer.Exit(subprocess.call(sshexec.ssh_command(target.ssh_args)))
 
 
 @vm_app.command("create")
-def vm_create() -> None:
-    """Create the development VM."""
+def vm_create(
+    force: bool = typer.Option(
+        False, "--force", help="Repoint [host] even if it names a different machine."
+    ),
+) -> None:
+    """Create a local VM and point [host] at it."""
     cfg = config.load_config()
     try:
         vm.require_backend(cfg.vm.backend)
     except vm.VmError as exc:
         _fail(str(exc))
-    if vm.exists(cfg.vm):
+
+    if not vm.exists(cfg.vm):
+        user_data_path: Path | None = None
+        if cfg.vm.backend == "multipass":
+            # Multipass provisions with cloud-init, the way a cloud server does.
+            try:
+                pubkey = hostspec.read_pubkey(cfg.host.key)
+            except FileNotFoundError as exc:
+                _fail(str(exc))
+                return
+            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+                f.write(hostspec.render_user_data(pubkey, cfg.paperless.timezone))
+                user_data_path = Path(f.name)
+
+        console.print(
+            f"Creating {cfg.vm.name} via {cfg.vm.backend} "
+            f"({cfg.vm.cpus} vCPU, {cfg.vm.memory}, {cfg.vm.disk}). "
+            "The first run downloads an image, which takes a few minutes…"
+        )
+        try:
+            vm.launch(cfg.vm, user_data_path)
+        except vm.VmError as exc:
+            _fail(str(exc))
+        finally:
+            if user_data_path:
+                user_data_path.unlink(missing_ok=True)
+    else:
         console.print(f"[yellow]•[/yellow] VM {cfg.vm.name!r} already exists.")
+
+    # The command that made the machine knows how to reach it, so it writes
+    # [host] rather than asking anyone to copy a path by hand.
+    try:
+        ssh_config, alias = vm.ssh_config_for(cfg.vm, cfg.host.key)
+        hostfile.apply(
+            config.find_config_file() or Path("pless.toml"),
+            hostfile.HostUpdate(ssh_config=str(ssh_config), ssh_alias=alias),
+            force=force,
+        )
+    except (vm.VmError, hostfile.HostFileError) as exc:
+        _fail(str(exc))
         return
 
-    user_data_path: Path | None = None
-    if cfg.vm.backend == "multipass":
-        try:
-            pubkey = hostspec.read_pubkey(cfg.ssh.key)
-        except FileNotFoundError as exc:
-            _fail(str(exc))
-            return
-        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-            f.write(hostspec.render_user_data(pubkey, cfg.paperless.timezone))
-            user_data_path = Path(f.name)
-
-    console.print(
-        f"Creating {cfg.vm.name} via {cfg.vm.backend} "
-        f"({cfg.vm.cpus} vCPU, {cfg.vm.memory}, {cfg.vm.disk}). "
-        "The first run downloads an image, which takes a few minutes…"
-    )
-    try:
-        vm.launch(cfg.vm, user_data_path)
-    except vm.VmError as exc:
-        _fail(str(exc))
-    finally:
-        if user_data_path:
-            user_data_path.unlink(missing_ok=True)
-
-    data = vm.info(cfg.vm)
-    next_step = "pless bootstrap" if cfg.vm.backend == "lima" else "pless storage init --confirm"
-    console.print(
-        f"[green]✓[/green] {cfg.vm.name} is up: {', '.join(data['addresses'])}. "
-        f"Next: [bold]{next_step}[/bold]"
-    )
+    console.print(f"[green]✓[/green] {cfg.vm.name} is up, and \\[host] now points at {alias}.")
+    next_step = "pless bootstrap" if cfg.vm.backend == "lima" else "pless doctor"
+    console.print(f"Next: [bold]{next_step}[/bold]")
 
 
 @vm_app.command("destroy")
 def vm_destroy(
     confirm: bool = typer.Option(False, "--confirm", help="Confirm deleting the VM."),
+    force: bool = typer.Option(
+        False, "--force", help="Delete even if the encrypted volume is unlocked."
+    ),
 ) -> None:
-    """Delete the development VM and everything on it. Destructive."""
+    """Delete the VM and everything on it. Destructive."""
     cfg = config.load_config()
     if not confirm:
         _fail(f"This deletes VM {cfg.vm.name!r} and everything on it. Run again with --confirm.")
+
+    # A local VM can be someone's real archive, and `vm destroy` is a command
+    # muscle memory types often. An unlocked volume means data is live in it.
+    if not force:
+        try:
+            state = storage.status(cfg, _host(cfg))
+            if state.is_mounted:
+                _fail(
+                    "The encrypted volume is unlocked and mounted, which means this VM is "
+                    "holding live data. Run `pless lock` first — or pass --force if you are "
+                    "certain there is nothing here you want."
+                )
+        except (targets.TargetError, storage.StorageError):
+            pass  # unreachable or never set up: nothing to protect
+
     typed = typer.prompt(f"Type the VM name ({cfg.vm.name}) to confirm")
     if typed != cfg.vm.name:
         _fail("The name did not match — aborting.")
@@ -472,16 +462,8 @@ def audit_cmd(
 ) -> None:
     """Audit exposure: what can someone on your network actually reach?"""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
-    result = sshexec.run(
-        target.user,
-        target.host,
-        target.key,
-        "sh -s",
-        timeout=120,
-        input_text=audit.COLLECT_SCRIPT,
-        port=target.port,
-    )
+    target = _host(cfg)
+    result = sshexec.run(target.ssh_args, "sh -s", timeout=120, input_text=audit.COLLECT_SCRIPT)
     if not result.ok:
         _fail(f"Collection failed: {result.stderr.strip()}")
     report = audit.analyse(result.stdout)
@@ -514,7 +496,7 @@ def audit_cmd(
 def tailscale_status() -> None:
     """Show Tailscale status on the target."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     state = tailscale.status(target)
     if not state.installed:
         console.print("[yellow]•[/yellow] Tailscale is not installed — run `pless tailscale up`.")
@@ -529,7 +511,7 @@ def tailscale_up() -> None:
     """Install Tailscale and join the tailnet chosen by TS_AUTHKEY."""
     cfg = config.load_config()
     sec = config.load_secrets()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
 
     state = tailscale.status(target)
     if not state.installed:
@@ -556,7 +538,7 @@ def harden_cmd(
 ) -> None:
     """Close SSH to the LAN — only the tailnet gets in afterwards."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     if not confirm:
         _fail(
             "This closes SSH to everything except Tailscale. If you lose tailnet access, "
@@ -583,7 +565,7 @@ def preflight_cmd(
 ) -> None:
     """Check whether this installation is fit to be trusted with documents."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
 
     reachable = sshexec.run(target.user, target.host, target.key, "true", port=target.port).ok
 
@@ -604,15 +586,7 @@ def preflight_cmd(
 
     audit_clean = False
     if reachable:
-        result = sshexec.run(
-            target.user,
-            target.host,
-            target.key,
-            "sh -s",
-            timeout=120,
-            input_text=audit.COLLECT_SCRIPT,
-            port=target.port,
-        )
+        result = sshexec.run(target.ssh_args, "sh -s", timeout=120, input_text=audit.COLLECT_SCRIPT)
         audit_clean = result.ok and audit.analyse(result.stdout).ok
 
     drill_passed: bool | None = None
@@ -655,7 +629,7 @@ def preflight_cmd(
 def bootstrap_cmd() -> None:
     """Apply the host spec over SSH to a machine that has already booted."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         facts = bootstrap.gather_facts(target)
     except bootstrap.BootstrapError as exc:
@@ -692,7 +666,7 @@ def storage_init(
 ) -> None:
     """Format the data volume as LUKS2 with ext4. Destructive."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     if not confirm:
         _fail("This FORMATS the data volume on the target. Run again with --confirm.")
     passphrase = typer.prompt(
@@ -717,7 +691,7 @@ def storage_init(
 def storage_status_cmd() -> None:
     """Show the LUKS status of the data volume on the active target."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         console.print(_storage_status_line(storage.status(cfg, target)))
     except storage.StorageError as exc:
@@ -728,7 +702,7 @@ def storage_status_cmd() -> None:
 def unlock() -> None:
     """Unlock and mount the data volume after a reboot, then start the stack."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     passphrase = typer.prompt("LUKS passphrase", hide_input=True)
     try:
         state = storage.unlock(cfg, target, passphrase)
@@ -742,7 +716,7 @@ def unlock() -> None:
 def lock() -> None:
     """Stop the stack, unmount and lock the data volume."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         state = storage.lock(cfg, target)
     except storage.StorageError as exc:
@@ -756,10 +730,8 @@ def deploy_paperless() -> None:
     """Write the compose stack and systemd unit to the target, then start Paperless."""
     cfg = config.load_config()
     sec = config.load_secrets()
-    target = _resolve_target(cfg)
-    console.print(
-        f"Deploying to {target.name} ({target.host}). The first run pulls ~2 GB of images…"
-    )
+    target = _host(cfg)
+    console.print(f"Deploying to {target.label}. The first run pulls ~2 GB of images…")
     try:
         deploy.install(cfg, sec, target)
     except (deploy.DeployError, storage.StorageError, ValueError) as exc:
@@ -784,7 +756,7 @@ def deploy_paperless() -> None:
 def deploy_status() -> None:
     """Show container status for the stack."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         console.print(deploy.compose(target, "ps --format table"))
     except deploy.DeployError as exc:
@@ -798,7 +770,7 @@ def deploy_logs(
 ) -> None:
     """Show logs from the stack."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         console.print(deploy.compose(target, f"logs --tail {tail} {service}".strip(), timeout=60))
     except deploy.DeployError as exc:
@@ -809,7 +781,7 @@ def deploy_logs(
 def paperless_health() -> None:
     """Check that Paperless answers on the target's localhost."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     try:
         code = deploy.http_status(target)
     except deploy.DeployError as exc:
@@ -825,24 +797,14 @@ def paperless_health() -> None:
 def tunnel() -> None:
     """Open an SSH tunnel to Paperless at http://localhost:8000. Ctrl-C closes it."""
     cfg = config.load_config()
-    target = _resolve_target(cfg)
+    target = _host(cfg)
     console.print(
         f"Tunnel open: [bold]http://localhost:{composegen.WEB_PORT}[/bold] "
-        f"-> {target.name} ({target.host}). Ctrl-C to close."
+        f"-> {target.label}. Ctrl-C to close."
     )
     raise typer.Exit(
         subprocess.call(
-            [
-                "ssh",
-                "-p",
-                str(target.port),
-                "-i",
-                str(target.key),
-                "-L",
-                f"{composegen.WEB_PORT}:127.0.0.1:{composegen.WEB_PORT}",
-                "-N",
-                f"{target.user}@{target.host}",
-            ]
+            sshexec.ssh_command(target.tunnel_args(composegen.WEB_PORT, composegen.WEB_PORT))
         )
     )
 

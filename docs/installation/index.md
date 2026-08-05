@@ -54,15 +54,17 @@ the only thing standing between you and a trip to fetch a keyboard, so do not wo
     **Your only copy of a document.** Until backup ships, treat this archive as a convenient
     index of files you still hold elsewhere, not as the place they live.
 
-## Choosing a target
+## Pointing pless at a machine
 
-Set it in `pless.toml`:
+Point `[host]` in `pless.toml` at a machine:
 
 ```toml
-[target]
-type = "pi"        # "pi" | "vm" | "hetzner"
+[host]
+address = "archive.local"
+user = "admin"
 ```
 
-Everything downstream — bootstrap, storage, deploy, audit — reads that one value. Switching
-targets is a config edit, not a different tool. See
-[Switch target](../cookbook/switch-target.md) for using a VM as a rehearsal for your Pi.
+There is no target type, because there is only one kind of target: something reachable over
+SSH. A Raspberry Pi, a VM on your hypervisor, an old laptop, a droplet at any provider — all
+the same to the tool. See [Switch target](../cookbook/switch-target.md) for using a local VM
+as a rehearsal before touching real hardware.

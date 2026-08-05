@@ -35,9 +35,6 @@ HCLOUD_TOKEN=your-token-here
 Save it in your password manager too.
 
 ```toml
-[target]
-type = "hetzner"
-
 [hetzner]
 location = "hel1"        # Helsinki
 server_type = "cx23"     # 2 vCPU, 4 GB RAM, 40 GB NVMe
@@ -89,7 +86,7 @@ which works on any server without partition surgery. If you later attach a Hetzn
 switch to a partition:
 
 ```toml
-[pi]
+[storage]
 data_mode = "partition"
 data_device = "/dev/disk/by-id/scsi-0HC_Volume_12345678"
 ```

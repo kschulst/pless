@@ -6,7 +6,7 @@ import shlex
 import time
 
 from pless import composegen, config, sshexec, storage
-from pless.targets import TargetHost
+from pless.targets import Host
 
 DATA_SUBDIRS = ["consume", "export", "media", "data", "postgres", "redis", "backups"]
 
@@ -16,22 +16,12 @@ class DeployError(RuntimeError):
 
 
 def _run(
-    target: TargetHost, command: str, input_text: str | None = None, timeout: int = 120
+    target: Host, command: str, input_text: str | None = None, timeout: int = 120
 ) -> sshexec.SshResult:
-    return sshexec.run(
-        target.user,
-        target.host,
-        target.key,
-        command,
-        timeout=timeout,
-        input_text=input_text,
-        port=target.port,
-    )
+    return sshexec.run(target.ssh_args, command, timeout=timeout, input_text=input_text)
 
 
-def _run_ok(
-    target: TargetHost, command: str, input_text: str | None = None, timeout: int = 120
-) -> str:
+def _run_ok(target: Host, command: str, input_text: str | None = None, timeout: int = 120) -> str:
     result = _run(target, command, input_text, timeout)
     if not result.ok:
         raise DeployError(
@@ -41,7 +31,7 @@ def _run_ok(
 
 
 def _write_remote_file(
-    target: TargetHost, path: str, content: str, mode: str = "0644", owner: str | None = None
+    target: Host, path: str, content: str, mode: str = "0644", owner: str | None = None
 ) -> None:
     """Write a file via stdin, so its contents never reach argv or a temp file."""
     quoted = shlex.quote(path)
@@ -50,7 +40,7 @@ def _write_remote_file(
         _run_ok(target, f"sudo chown {owner} {quoted}")
 
 
-def install(cfg: config.Config, secrets: config.Secrets, target: TargetHost) -> None:
+def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
     """Write the compose file, server-side .env and systemd unit, then start."""
     state = storage.status(cfg, target)
     if not state.is_mounted:
@@ -85,13 +75,13 @@ def install(cfg: config.Config, secrets: config.Secrets, target: TargetHost) -> 
     _run_ok(target, "sudo systemctl start paperless.service", timeout=900)
 
 
-def compose(target: TargetHost, args: str, timeout: int = 120) -> str:
+def compose(target: Host, args: str, timeout: int = 120) -> str:
     return _run_ok(
         target, f"cd {composegen.INSTALL_DIR} && sudo docker compose {args}", timeout=timeout
     )
 
 
-def http_status(target: TargetHost) -> str:
+def http_status(target: Host) -> str:
     """HTTP status from Paperless on the target's localhost. '000' means no answer."""
     return _run_ok(
         target,
@@ -100,7 +90,7 @@ def http_status(target: TargetHost) -> str:
     )
 
 
-def wait_healthy(target: TargetHost, timeout_seconds: int = 300) -> bool:
+def wait_healthy(target: Host, timeout_seconds: int = 300) -> bool:
     """Wait for the web server to answer. The first start migrates the database."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:

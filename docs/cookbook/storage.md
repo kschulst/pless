@@ -32,8 +32,8 @@ Growing it needs no new hardware, only free space underneath.
 Raise the size in `pless.toml`:
 
 ```toml
-[pi]
-data_size_gb = 400   # was 200
+[storage]
+data_size_gb = 400   # was 100
 ```
 
 Then, on the target:
@@ -121,7 +121,7 @@ exit
 ```
 
 ```toml
-[pi]
+[storage]
 data_mode = "partition"
 data_device = "/dev/disk/by-id/YOUR-DISK-ID"
 ```

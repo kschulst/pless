@@ -52,7 +52,7 @@ Open Imager's customisation settings before writing:
 | Field | Value |
 |---|---|
 | Hostname | Anything you like — `paperless`, `archive`, `box` |
-| Username | Anything you like; it must match `[pi] user` in `pless.toml` |
+| Username | Anything you like; it must match `[host] user` in `pless.toml` |
 | **SSH** | Enabled, **public-key authentication only** |
 | Public key | The contents of `~/.ssh/id_ed25519.pub` |
 | Locale | Your timezone and keyboard layout |
@@ -82,22 +82,22 @@ ssh <username>@<hostname>.local
 If mDNS does not resolve, find the address in your router's DHCP list. Then, in `pless.toml`:
 
 ```toml
-[target]
-type = "pi"
-
-[pi]
-host = "<hostname>.local"   # or the IP address
+[host]
+address = "<hostname>.local"   # or the IP address
 user = "<username>"
+
+[storage]
 data_mode = "file"
-data_size_gb = 200          # sparse — costs nothing until filled
+data_size_gb = 100             # sparse — costs nothing until filled
 ```
 
-Set `data_size_gb` below your medium's capacity. On a 32 GB card, use something like 16.
+Set `data_size_gb` well below your medium's capacity — see
+[sizing](../reference/configuration.md#sizing). On a 32 GB card, use about 16.
 
 ## 4. Provision
 
 ```bash
-pless doctor      # should be all green with target=pi
+pless doctor      # should be all green
 pless bootstrap   # Docker, UFW, fail2ban, SSH hardening, unattended-upgrades
 ```
 

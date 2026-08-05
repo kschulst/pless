@@ -39,9 +39,10 @@ $ pless doctor
 ✓ pless.toml found
 ✓ SSH key found (~/.ssh/id_ed25519)
 
-Active target: pi
-✓ [pi] host is set in pless.toml
-✓ [pi] data_mode=file (200 GB LUKS file)
+Host
+✓ [host] points at archive.local
+✓ SSH key found (~/.ssh/id_ed25519)
+✓ [storage] data_mode=file (100 GB LUKS file)
 
 All clear. Next: pless bootstrap
 ```

@@ -1,15 +1,17 @@
 # Switch target
 
-`pless` treats every destination the same way: something reachable over SSH. Moving between a
-Raspberry Pi, a local VM and a cloud server is a configuration change, not a different tool.
+`pless` knows one kind of destination: something reachable over SSH. Moving between a
+Raspberry Pi, a VM on your hypervisor and a cloud server is a configuration change, not a
+different tool — and not even a change of *kind*.
 
 ```toml
-[target]
-type = "pi"     # "pi" | "vm" | "hetzner"
+[host]
+address = "archive.local"
+user = "admin"
 ```
 
-Every command reads that one value. `pless audit` on a VM runs exactly the checks it runs on
-your Pi.
+`pless audit` against a VM runs exactly the checks it runs against your Pi, because to the
+tool they are the same thing.
 
 ## Rehearse before you touch real hardware
 
@@ -17,15 +19,12 @@ This is the most useful thing a second target gives you. Before running somethin
 on the machine holding your documents, run it on a VM that costs nothing to destroy.
 
 ```toml
-[target]
-type = "vm"
-
 [vm]
 backend = "lima"     # Debian 13, SSH bootstrap — like a Pi
 ```
 
 ```bash
-pless vm create
+pless vm create      # also points [host] at the new VM
 pless bootstrap
 pless storage init --confirm     # throwaway passphrase
 pless deploy paperless
@@ -39,7 +38,8 @@ over:
 pless vm destroy --confirm
 ```
 
-Then set `type = "pi"` and do it for real, knowing what the output should look like.
+Then point `[host]` at the real machine and do it again, knowing what the output should look
+like.
 
 ### Match the backend to the destination
 
@@ -66,8 +66,12 @@ pless.vm.toml       # scratch VM
 ```
 
 `pless` walks up from your working directory looking for `pless.toml`, the way git finds its
-repository root. The simplest way to keep two live is separate directories, each with its
-own config and `.env`.
+repository root. The simplest way to keep two live is separate directories, each with its own
+config and `.env`.
+
+Note that `pless vm create` writes `[host]` for you, and refuses to repoint it at a different
+machine without `--force` — so it cannot quietly steer a config away from a machine holding
+documents.
 
 !!! warning "Check which machine you are on"
 

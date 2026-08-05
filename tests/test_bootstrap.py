@@ -5,7 +5,8 @@ from pless.hostspec import packages_for, render_bootstrap_script
 
 
 def facts_output(
-    hostname: str = "testvert",
+    hostname: str = "testhost",
+    user: str = "deploy",
     model: str = "Raspberry Pi 5 Model B Rev 1.0",
     arch: str = "aarch64",
     distro_id: str = "debian",
@@ -15,6 +16,7 @@ def facts_output(
 ) -> str:
     return (
         f"hostname={hostname}\n"
+        f"user={user}\n"
         f"model={model}\n"
         f"arch={arch}\n"
         f"distro_id={distro_id}\n"
@@ -26,7 +28,7 @@ def facts_output(
 
 def test_parse_facts_reads_all_fields() -> None:
     facts = parse_facts(facts_output())
-    assert facts.hostname == "testvert"
+    assert facts.hostname == "testhost"
     assert facts.model == "Raspberry Pi 5 Model B Rev 1.0"
     assert facts.architecture == "aarch64"
     assert facts.distro_id == "debian"
@@ -38,7 +40,7 @@ def test_parse_facts_reads_all_fields() -> None:
 
 def test_any_hostname_is_accepted() -> None:
     # The tool must have no opinion about what the machine is called.
-    for name in ("paperless", "testvert", "arkiv-01", "pi"):
+    for name in ("paperless", "testhost", "arkiv-01", "pi"):
         assert parse_facts(facts_output(hostname=name)).hostname == name
 
 
@@ -46,7 +48,7 @@ def test_field_order_does_not_matter() -> None:
     # Key=value exists precisely so order changes or extra fields do not break parsing.
     scrambled = "\n".join(reversed(facts_output().strip().splitlines()))
     facts = parse_facts(scrambled + "\nekstra_felt=noe\n")
-    assert facts.hostname == "testvert"
+    assert facts.hostname == "testhost"
     assert facts.architecture == "aarch64"
 
 

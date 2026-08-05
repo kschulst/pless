@@ -2,14 +2,25 @@
 
 Chosen over paramiko/fabric because the system ssh already reuses ssh-agent,
 ~/.ssh/config, known_hosts and any ProxyJump or multiplexing setup, none of
-which we then have to reimplement. Boring and reliable.
+which we then have to reimplement. Boring and reliable — and it is why a host
+can be described by an SSH config file rather than by a target type.
 """
 
 from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+
+# Applied to every connection. Command-line options win over anything in an
+# SSH config file, so these hold even when the destination comes from one.
+COMMON_OPTIONS = [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+    "-o",
+    "ConnectTimeout=10",
+]
 
 
 @dataclass
@@ -23,32 +34,23 @@ class SshResult:
         return self.exit_code == 0
 
 
-def ssh_command(user: str, host: str, key: Path, remote_command: str, port: int = 22) -> list[str]:
-    return [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "ConnectTimeout=10",
-        "-p",
-        str(port),
-        "-i",
-        str(key),
-        f"{user}@{host}",
-        remote_command,
-    ]
+def ssh_command(destination: list[str], remote_command: str | None = None) -> list[str]:
+    """Build an ssh invocation.
+
+    `destination` is everything identifying the machine — either
+    `["-p", "22", "-i", key, "user@address"]` or `["-F", config, "alias"]`.
+    """
+    command = ["ssh", *COMMON_OPTIONS, *destination]
+    if remote_command is not None:
+        command.append(remote_command)
+    return command
 
 
 def run(
-    user: str,
-    host: str,
-    key: Path,
+    destination: list[str],
     remote_command: str,
     timeout: int = 60,
     input_text: str | None = None,
-    port: int = 22,
 ) -> SshResult:
     """Run a command over SSH.
 
@@ -56,7 +58,7 @@ def run(
     argv, where any local user could read them with `ps`.
     """
     completed = subprocess.run(
-        ssh_command(user, host, key, remote_command, port),
+        ssh_command(destination, remote_command),
         capture_output=True,
         text=True,
         timeout=timeout,

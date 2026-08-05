@@ -1,31 +1,21 @@
 # pless configuration. No secrets here — those live in .env (a cache) and in
 # your password manager (the source of truth).
 
-[target]
-# "vm": local development VM — "pi": Raspberry Pi — "hetzner": Hetzner Cloud
-type = "vm"
+# The machine pless configures and operates. Anything reachable over SSH works:
+# a Raspberry Pi, a VM on your hypervisor, an old laptop, a droplet at any
+# provider. How it came into existence is not pless's concern.
+[host]
+ssh_config = "~/.lima/pless-dev/ssh.config"
+ssh_alias = "lima-pless-dev"
 
-[tailscale]
-# Which tailnet the machine joins is decided by TS_AUTHKEY in .env — one key
-# belongs to one tailnet. If you have several tailnets, you choose between
-# them by choosing the key.
-login_server = ""     # empty = Tailscale's control plane; a URL for self-hosted Headscale
-hostname = ""         # empty = use the machine's own hostname
+# Alternatively, point at an SSH config entry instead of the details above.
+# This is what `pless vm create` writes, and what you want if your setup
+# already involves a bastion, a non-standard port, or anything else your
+# ~/.ssh/config knows about — ssh handles it, so pless does not have to.
+#   ssh_config = "~/.ssh/config"
+#   ssh_alias = "archive"
 
-[access]
-mode = "tailscale"    # "tailscale" | "ssh-tunnel"
-
-[vm]
-backend = "lima"      # "lima" = Debian 13 + bootstrap; "multipass" = Ubuntu + cloud-init
-name = "pless-dev"
-cpus = 2
-memory = "4G"
-disk = "20G"
-data_size_gb = 5      # loop file standing in for the physical data disk
-
-[pi]
-host = ""             # <hostname>.local, a Tailscale name, or an IP address
-user = "ubuntu"       # the user you created when flashing
+[storage]
 data_mode = "file"    # "file" = LUKS file on the root filesystem; "partition" = own block device
 # Sparse: costs nothing until filled. Size it so a full archive still leaves
 # room for the OS — roughly (disk size - 15 GB for OS and images - 20 GB margin).
@@ -33,15 +23,17 @@ data_mode = "file"    # "file" = LUKS file on the root filesystem; "partition" =
 data_size_gb = 100
 data_device = ""      # data_mode="partition" only; use /dev/disk/by-id/...
 
-[hetzner]
-location = "hel1"
-server_type = "cx23"
-image = "debian-13"
-server_name = "paperless-01"
+min_free_gb_after_upload = 10
+max_disk_usage_percent_after_upload = 70
 
-[ssh]
-user = "root"
-key_path = "~/.ssh/id_ed25519"
+[tailscale]
+# Which tailnet the machine joins is decided by TS_AUTHKEY in .env — one key
+# belongs to one tailnet. If you have several, you choose by choosing the key.
+login_server = ""     # empty = Tailscale's control plane; a URL for self-hosted Headscale
+hostname = ""         # empty = use the machine's own hostname
+
+[access]
+mode = "tailscale"    # "tailscale" | "ssh-tunnel"
 
 [paperless]
 version = "2.20.15"   # exact image tag; bump it deliberately
@@ -53,10 +45,25 @@ admin_user = "admin"
 local_documents = "./documents"
 local_backups = "./backups"
 
-[storage]
-min_free_gb_after_upload = 10
-max_disk_usage_percent_after_upload = 70
-
 [backup]
 # Empty disables off-site backup. Set to e.g. "b2:my-bucket:paperless" once ready.
 restic_repository = ""
+
+# --- Optional: ways to obtain a host, rather than kinds of host -------------
+
+# `pless vm create` makes a local VM and points [host] at it.
+[vm]
+backend = "lima"      # "lima" = Debian + bootstrap; "multipass" = Ubuntu + cloud-init
+name = "pless-dev"
+cpus = 2
+memory = "4G"
+disk = "20G"
+
+# Used if you let pless create a Hetzner Cloud server for you. Every other
+# provider works too — create the machine however you like and point [host] at
+# it; this section only saves you that step.
+[hetzner]
+location = "hel1"
+server_type = "cx23"
+image = "debian-13"
+server_name = "paperless-01"

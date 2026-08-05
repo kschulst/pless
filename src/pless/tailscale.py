@@ -14,7 +14,7 @@ import json
 from dataclasses import dataclass
 
 from pless import config, sshexec
-from pless.targets import TargetHost
+from pless.targets import Host
 
 INTERFACE = "tailscale0"
 INSTALL_URL = "https://tailscale.com/install.sh"
@@ -51,13 +51,11 @@ def parse_status(status_json: str) -> TailscaleStatus:
     )
 
 
-def _run(target: TargetHost, command: str, timeout: int = 120) -> sshexec.SshResult:
-    return sshexec.run(
-        target.user, target.host, target.key, command, timeout=timeout, port=target.port
-    )
+def _run(target: Host, command: str, timeout: int = 120) -> sshexec.SshResult:
+    return sshexec.run(target.ssh_args, command, timeout=timeout)
 
 
-def status(target: TargetHost) -> TailscaleStatus:
+def status(target: Host) -> TailscaleStatus:
     probe = _run(target, "command -v tailscale >/dev/null && tailscale status --json || echo ''")
     if not probe.stdout.strip():
         return TailscaleStatus(
@@ -66,7 +64,7 @@ def status(target: TargetHost) -> TailscaleStatus:
     return parse_status(probe.stdout)
 
 
-def install(target: TargetHost) -> None:
+def install(target: Host) -> None:
     """Install Tailscale using their official script, which adds their apt repo."""
     result = _run(target, f"curl -fsSL {INSTALL_URL} | sudo sh", timeout=600)
     if not result.ok:
@@ -75,7 +73,7 @@ def install(target: TargetHost) -> None:
 
 def up(
     cfg: config.Config,
-    target: TargetHost,
+    target: Host,
     authkey: str,
     hostname: str = "",
 ) -> TailscaleStatus:
@@ -112,7 +110,7 @@ ufw reload
 """
 
 
-def harden(target: TargetHost) -> None:
+def harden(target: Host) -> None:
     """Close SSH to the LAN. Requires Tailscale to be up, or we lock ourselves out."""
     current = status(target)
     if not current.is_up:
@@ -121,14 +119,6 @@ def harden(target: TargetHost) -> None:
             "Refusing to close LAN SSH before another way in exists — "
             "run `pless tailscale up` first."
         )
-    result = sshexec.run(
-        target.user,
-        target.host,
-        target.key,
-        "sudo sh -s",
-        timeout=120,
-        input_text=HARDEN_SCRIPT,
-        port=target.port,
-    )
+    result = sshexec.run(target.ssh_args, "sudo sh -s", timeout=120, input_text=HARDEN_SCRIPT)
     if not result.ok:
         raise TailscaleError(f"Firewall hardening failed: {result.stderr.strip()}")

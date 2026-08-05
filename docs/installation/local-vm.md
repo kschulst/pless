@@ -37,17 +37,16 @@ use Lima — it exercises the same SSH-bootstrap path and the same Debian packag
 ## Configure and create
 
 ```toml
-[target]
-type = "vm"
-
 [vm]
 backend = "lima"      # or "multipass"
 name = "pless-dev"
 cpus = 2
 memory = "4G"
 disk = "20G"
-data_size_gb = 5      # size of the simulated data disk
 ```
+
+`pless vm create` writes `[host]` for you, pointing at the VM's SSH config — which is how a
+machine whose port changes on every restart stays an ordinary host rather than a special case.
 
 ```bash
 pless doctor
