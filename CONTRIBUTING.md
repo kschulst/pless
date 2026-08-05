@@ -1,7 +1,11 @@
-# Development
+# Contributing
 
-How to work on `pless` itself. If you only want to *use* it, start at
-[Getting started](../getting-started/index.md) instead.
+How to work on `pless` itself. If you only want to *use* it, start at the
+[documentation site](https://kschulst.github.io/pless/) instead.
+
+Design decisions and their reasoning live in [`adr/`](adr/README.md). Read the register before
+changing an architectural choice; if you disagree with one, add a superseding record rather
+than silently reversing it.
 
 ## Setup
 
@@ -106,6 +110,15 @@ than reimplementing it.
 - **Pin versions deliberately.** Container tags are exact, so an unattended pull cannot carry
   a database across an unplanned migration.
 - **Be honest about what does not exist.** A status table beats a promise.
+
+## Issues
+
+Work to be done lives in [GitHub issues](https://github.com/kschulst/pless/issues) — not in
+the documentation, and not in a file in the repository. The documentation says what works
+today; the issue tracker says what is being done about the rest.
+
+Labels worth knowing: `area:*` for which part of the system, `type:*` for what kind of work,
+and `good first issue` for places to start.
 
 ## Releasing
 

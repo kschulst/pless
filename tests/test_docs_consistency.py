@@ -123,6 +123,46 @@ class TestLinks:
         assert not broken, f"{page.relative_to(REPO_ROOT)} links to missing files: {broken}"
 
 
+class TestArchitectureDecisionRecords:
+    """ADRs live beside the code, not on the site, and the register must be complete."""
+
+    ADR_DIR = REPO_ROOT / "adr"
+
+    def records(self) -> list[Path]:
+        return sorted(
+            p for p in self.ADR_DIR.glob("[0-9][0-9][0-9][0-9]-*.md") if p.stem != "0000-template"
+        )
+
+    def test_every_record_is_in_the_register(self) -> None:
+        register = (self.ADR_DIR / "README.md").read_text()
+        missing = [p.name for p in self.records() if p.name not in register]
+        assert not missing, (
+            f"ADRs exist but are not listed in adr/README.md: {missing}. "
+            "An unregistered record is one nobody finds."
+        )
+
+    def test_numbers_are_unique_and_contiguous(self) -> None:
+        numbers = [int(p.name[:4]) for p in self.records()]
+        assert numbers == list(range(1, len(numbers) + 1)), (
+            f"ADR numbers must be unique and contiguous from 0001; got {numbers}."
+        )
+
+    def test_each_record_states_a_status_and_date(self) -> None:
+        incomplete = [
+            p.name
+            for p in self.records()
+            if "- **Status:**" not in p.read_text() or "- **Date:**" not in p.read_text()
+        ]
+        assert not incomplete, f"ADRs missing a Status or Date line: {incomplete}"
+
+    def test_records_are_not_published_to_the_site(self) -> None:
+        # Publishing them without a nav entry would make them orphan pages:
+        # reachable by URL but unlinked, which is neither private nor useful.
+        assert not (DOCS / "adr").exists(), (
+            "ADRs must stay outside docs/, or Zensical will build them as orphan pages."
+        )
+
+
 class TestNavigation:
     def test_every_page_is_in_the_nav(self) -> None:
         with (REPO_ROOT / "zensical.toml").open("rb") as f:

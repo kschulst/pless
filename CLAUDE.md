@@ -74,6 +74,13 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-Design decisions and their reasoning are in [DECISIONS.md](DECISIONS.md). Read it before
-changing an architectural choice; if you disagree with one, add a superseding entry rather
-than silently reversing it.
+## Where things are recorded
+
+- **Why the code looks like this** — [`adr/`](adr/README.md). Read the register before
+  changing an architectural choice; if you disagree with one, add a superseding record rather
+  than silently reversing it. Write a new ADR when a choice would surprise a reader, closes off
+  an obvious alternative, or took an argument to reach.
+- **What is being worked on** — [GitHub issues](https://github.com/kschulst/pless/issues).
+  Not the documentation, and not a file in the repo. The docs say what works today; the
+  tracker says what is being done about the rest.
+- **How to work on it** — [CONTRIBUTING.md](CONTRIBUTING.md).

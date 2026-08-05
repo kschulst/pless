@@ -30,19 +30,12 @@ them.
 Two obvious ones are missing because the features are missing. Being straight about that is
 more useful than writing instructions that do not work:
 
-**Importing your documents.** Not built. Planned via the Paperless REST API, so that
-duplicate detection and per-file status come from Paperless rather than being guessed at from
-a folder that files disappear out of. `pless docs scan` and `pless docs estimate` already
-work, so you can survey and size your collection today.
-
-**Backup and restore.** Not built. Planned in two layers — Paperless's document exporter
-pulled down locally, and encrypted [restic](https://restic.net/) snapshots pushed off-site to
-Backblaze B2. Deliberately a different provider from wherever the server runs, so that losing
-an account does not lose both.
-
-Restore drills ship *with* backup rather than after it. `pless backup verify` will perform a
-real restore into a scratch location and inspect what came back, because a backup that has
-never been restored is a belief rather than a backup.
+- **[Importing your documents](https://github.com/kschulst/pless/issues/1)** — not built.
+  `pless docs scan` and `pless docs estimate` already work, so you can survey and size your
+  collection today.
+- **[Backup and restore](https://github.com/kschulst/pless/issues/2)** — not built, along with
+  [restore drills](https://github.com/kschulst/pless/issues/3).
 
 Until those land, keep your originals where they already are. Treat this archive as a
-searchable index of documents you still hold elsewhere.
+searchable index of documents you still hold elsewhere — and note that `pless preflight` will
+tell you the same thing, in as many words.

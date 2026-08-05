@@ -59,8 +59,10 @@ uv run ruff format .
 zensical serve      # docs at http://localhost:8000
 ```
 
-Design decisions and their reasoning are recorded in [DECISIONS.md](DECISIONS.md) — written
-in Norwegian, as the project's working log.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide, and
+[`adr/`](adr/README.md) for why the architecture is the way it is.
+
+Work in progress lives in [issues](https://github.com/kschulst/pless/issues).
 
 ## Licence
 

@@ -149,41 +149,22 @@ each piece:
 | Deploying the Paperless-ngx stack | :material-check: Working |
 | Tailscale access and LAN hardening | :material-check: Working |
 | Exposure auditing | :material-check: Working |
-| Raspberry Pi as a target | :material-progress-clock: Documented, awaiting hardware validation |
-| Hetzner Cloud as a target | :material-progress-clock: Code and unit tests, not validated live |
-| **Importing your documents** | :material-close: Not built yet |
-| **Backup, restore, and restore drills** | :material-close: Not built yet |
 | Readiness gate (`pless preflight`) | :material-check: Working |
-| Alternative unlock methods (Tang, phone-based) | :material-close: Planned |
-| Password-manager integration for generated secrets | :material-close: Planned |
-| Web setup wizard | :material-close: Planned |
+| Raspberry Pi as a target | :material-progress-clock: Documented, [awaiting hardware validation](https://github.com/kschulst/pless/issues/4) |
+| Hetzner Cloud as a target | :material-progress-clock: Code and unit tests, [not validated live](https://github.com/kschulst/pless/issues/5) |
+| **Importing your documents** | :material-close: [Not built](https://github.com/kschulst/pless/issues/1) |
+| **Backup, restore, and restore drills** | :material-close: [Not built](https://github.com/kschulst/pless/issues/2) |
+| Alternative unlock methods | :material-close: [Planned](https://github.com/kschulst/pless/issues/6) |
+| Password-manager integration | :material-close: [Planned](https://github.com/kschulst/pless/issues/7) |
+| Web setup wizard | :material-close: [Planned](https://github.com/kschulst/pless/issues/8) |
 
 ### What comes next
 
-**Import** is the immediate priority — without it there is no archive. It will upload
-through the Paperless REST API rather than the consume folder, so that duplicate detection
-and per-file status come from Paperless itself instead of being re-implemented.
+**Import** is the immediate priority — without it there is no archive. **Backup** follows,
+and restore drills ship with it rather than after it, because a backup that has never been
+restored is a belief rather than a backup. Until both exist, `pless preflight` deliberately
+refuses to give a green light.
 
-**Backup** follows, in two layers: Paperless's own document exporter pulled down to your
-machine, and encrypted [restic](https://restic.net/) snapshots pushed to off-site object
-storage. The originals and the metadata are kept separable, so you can always extract just
-the documents.
-
-**Restore drills** ship with backup, not after it. A backup that has never been restored is
-not a backup — it is a belief. `pless backup verify` will therefore perform a real restore
-into a scratch location and check what came back, rather than merely confirming that an
-archive file exists. `pless preflight` already refuses to give a green light until that
-verification exists.
-
-**Easier ways to unlock.** Manual unlock after every reboot is the honest default, but not
-the only possible one. [Clevis and Tang](https://github.com/latchset/tang) would let the
-machine unlock itself while at home and stay sealed anywhere else; unlocking from a phone is
-worth exploring too. The LUKS volume is created with a spare key slot so either can be added
-without re-encrypting anything.
-
-**Password-manager integration.** Generated secrets currently land in `.env`, and copying
-them somewhere durable is left to you — the most error-prone step in the whole setup. Writing
-them directly through a password manager's CLI would close that gap.
-
-**A web setup wizard**, driving the same core modules as the CLI, for people who would rather
-not start with a terminal.
+What is being worked on, and the reasoning behind each piece, lives in the
+[issue tracker](https://github.com/kschulst/pless/issues). This page says what works today;
+the tracker says what is being done about the rest.
