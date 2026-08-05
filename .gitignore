@@ -21,3 +21,6 @@ site/
 
 # Build artifacts
 dist/
+
+# Generated at build time by hatch-vcs
+src/pless/_version.py

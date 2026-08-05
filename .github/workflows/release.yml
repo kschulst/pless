@@ -1,10 +1,14 @@
 name: Release
 
-# Releases are cut from tags, not from every push to main. CI already builds
-# and tests each push; publishing is a deliberate act.
+# Cut a release from the GitHub UI: Releases -> Draft a new release -> pick a
+# new tag like v0.1.0a2 -> Generate release notes -> Publish.
+#
+# Publishing the release creates the tag, which is where the version comes from
+# (see [tool.hatch.version] in pyproject.toml). Nothing has to be edited or kept
+# in sync, and the published package cannot disagree with what was tagged.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -15,6 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # hatch-vcs reads the version from git, so the tags have to be here.
+          # The default shallow checkout fetches none of them.
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -32,6 +40,11 @@ jobs:
       - name: Build
         run: uv build
 
+      - name: Show what will be published
+        run: ls -l dist/
+
+      # A package that cannot bootstrap itself from a fresh install is broken
+      # in the way that matters most, so prove it before anyone can install it.
       - name: Verify the wheel installs and runs from a clean directory
         run: |
           python -m venv /tmp/verify
@@ -40,6 +53,16 @@ jobs:
           /tmp/verify/bin/pless init
           test -f pless.toml && test -f .env
           /tmp/verify/bin/pless version
+
+      - name: Confirm the built version matches the tag
+        if: github.event_name == 'release'
+        run: |
+          built=$(ls dist/*.whl | sed -E 's/.*pless-(.*)-py3.*/\1/')
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag built=$built"
+          # A dev or dirty suffix means the tag was not checked out cleanly,
+          # which would publish a version nobody asked for.
+          test "$built" = "$tag"
 
       - uses: actions/upload-artifact@v4
         with:

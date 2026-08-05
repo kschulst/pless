@@ -122,30 +122,39 @@ and `good first issue` for places to start.
 
 ## Releasing
 
-Versions follow [PEP 440](https://peps.python.org/pep-0440/). While the project is alpha,
-releases are pre-releases — `0.1.0a1`, `0.1.0a2` — which means `pip install pless` will
-**not** pick them up unless someone asks for them explicitly:
+Versions follow [PEP 440](https://peps.python.org/pep-0440/), and **the git tag is the
+version** — `hatch-vcs` derives it, so no file holds a version number and nothing can drift
+out of sync with what was tagged.
+
+While the project is alpha, releases are pre-releases (`0.1.0a1`, `0.1.0a2`), which means
+`pip install pless` will **not** pick them up unless someone asks:
 
 ```bash
 pip install --pre pless
 ```
 
-That is the intended behaviour for now: the name is reserved and the pipeline is proven,
-without anyone installing an archive tool that cannot yet back itself up.
+That is deliberate for now: the name is reserved and the pipeline is proven, without anyone
+installing an archive tool that cannot yet back itself up.
 
-To cut a release:
+### Cutting one
 
-1. Update the version in `pyproject.toml` **and** `src/pless/__init__.py`.
-2. Commit, then tag: `git tag v0.1.0a2 && git push --tags`.
-3. The release workflow lints, tests, builds, installs the wheel into a clean virtualenv and
-   runs `pless init` in an empty directory — because a package that cannot bootstrap itself
-   from a fresh install is broken in the exact way that matters most.
-4. Publishing uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) over
-   OIDC, so no API token exists anywhere to leak.
+Entirely from the GitHub UI:
 
-!!! note "One-time PyPI setup"
+1. **Releases → Draft a new release**
+2. **Choose a tag → create a new tag**, e.g. `v0.1.0a2`
+3. **Generate release notes** — GitHub assembles them from the commits since the last release
+4. **Publish release**
 
-    Trusted Publishing must be configured once on PyPI: add a pending publisher for the
-    project `pless`, owner `kschulst`, repository `pless`, workflow `release.yml`,
-    environment `pypi`. Until that exists, the publish step will fail with a permissions
-    error — which is PyPI correctly refusing an unknown publisher.
+Publishing creates the tag, which triggers the release workflow. It lints, tests, builds,
+installs the wheel into a clean virtualenv and runs `pless init` in an empty directory —
+because a package that cannot bootstrap itself from a fresh install is broken in the way that
+matters most — then confirms the built version matches the tag before publishing.
+
+Publishing uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/) over
+OIDC, so no API token exists anywhere to leak.
+
+Trusted Publishing is already configured on PyPI for this repository. If it ever needs
+redoing — a rename, a new repository — the publisher is registered against project `pless`,
+owner `kschulst`, repository `pless`, workflow `release.yml`, environment `pypi`. Without a
+matching entry, the publish step fails with a permissions error, which is PyPI correctly
+refusing an unknown publisher.

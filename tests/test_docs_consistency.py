@@ -183,3 +183,33 @@ class TestNavigation:
         referenced = re.findall(r"'([^']+\.md)'", nav_text)
         missing = [name for name in referenced if not (DOCS / name).exists()]
         assert not missing, f"zensical.toml navigates to pages that do not exist: {missing}"
+
+
+class TestVersionIsSingleSourced:
+    """The git tag is the version. Nothing else may claim to know it.
+
+    A hardcoded version that drifts from the tag publishes a package that
+    misreports itself — and a released version cannot be corrected, only
+    yanked.
+    """
+
+    def test_pyproject_declares_the_version_dynamic(self) -> None:
+        with (REPO_ROOT / "pyproject.toml").open("rb") as f:
+            project = tomllib.load(f)["project"]
+        assert "version" not in project, (
+            "pyproject.toml pins a static version. The version comes from the git "
+            'tag via hatch-vcs; remove it and keep `dynamic = ["version"]`.'
+        )
+        assert "version" in project.get("dynamic", [])
+
+    def test_no_module_hardcodes_a_version_string(self) -> None:
+        offenders = [
+            path.name
+            for path in (REPO_ROOT / "src" / "pless").glob("*.py")
+            if path.name != "_version.py"
+            and re.search(r'^__version__\s*=\s*["\']\d', path.read_text(), re.MULTILINE)
+        ]
+        assert not offenders, (
+            f"These modules hardcode a version: {offenders}. Read it from package "
+            "metadata instead, so the tag stays the single source."
+        )

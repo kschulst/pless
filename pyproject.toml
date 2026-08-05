@@ -1,6 +1,8 @@
 [project]
 name = "pless"
-version = "0.1.0a1"
+# The git tag is the version — see [tool.hatch.version]. Nothing here to keep
+# in sync, and nothing that can disagree with what was tagged.
+dynamic = ["version"]
 description = "Self-hosted Paperless-ngx on hardware you own — encrypted at rest, invisible on your LAN"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -51,8 +53,16 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+# Written at build time so an installed package knows its version without
+# needing git present.
+version-file = "src/pless/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pless"]
