@@ -166,6 +166,10 @@ and restore drills ship with it rather than after it, because a backup that has 
 restored is a belief rather than a backup. Until both exist, `pless preflight` deliberately
 refuses to give a green light.
 
+Backup will target either a local directory or off-site object storage, and the machine will
+hold a key that **cannot delete** what it has already written — otherwise whoever takes the
+machine takes the rescue with it.
+
 What is being worked on, and the reasoning behind each piece, lives in the
 [issue tracker](https://github.com/kschulst/pless/issues). This page says what works today;
 the tracker says what is being done about the rest.

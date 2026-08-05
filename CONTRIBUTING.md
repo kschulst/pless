@@ -111,6 +111,29 @@ than reimplementing it.
   a database across an unplanned migration.
 - **Be honest about what does not exist.** A status table beats a promise.
 
+## Designing non-trivial changes
+
+Anything that touches several modules, changes the security model, or would otherwise be
+decided implicitly while typing goes through
+[SPDD](https://github.com/kschulst/pless/tree/main/spdd) first — a short analysis, then a
+REASONS Canvas committed *before* the code it describes.
+
+```bash
+/spdd-analysis        # enrich the context: domain, direction, risks
+/spdd-reasons-canvas  # the structured prompt
+/spdd-generate        # code and tests from the canvas
+```
+
+Artefacts are named `NNN-YYYYMMDD-[Action]-kebab.md` with no ticket prefix; they link to
+issues in their content rather than in their filename, and each issue gets a comment pointing
+back at the artefact.
+
+Skip it for bug fixes, small refactors and documentation edits. It is a tool for avoiding
+implicit decisions, not a ceremony.
+
+Lasting architectural decisions still belong in [`adr/`](adr/README.md) — a canvas references
+those rather than restating them.
+
 ## Issues
 
 Work to be done lives in [GitHub issues](https://github.com/kschulst/pless/issues) — not in

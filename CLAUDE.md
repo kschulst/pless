@@ -83,4 +83,7 @@ uv run ruff format .
 - **What is being worked on** — [GitHub issues](https://github.com/kschulst/pless/issues).
   Not the documentation, and not a file in the repo. The docs say what works today; the
   tracker says what is being done about the rest.
+- **How a non-trivial change was designed** — [`spdd/`](spdd/README.md). Analysis and a
+  REASONS Canvas, committed before the code. Used for cross-module work and anything touching
+  the security model; skipped for bug fixes and small refactors.
 - **How to work on it** — [CONTRIBUTING.md](CONTRIBUTING.md).
