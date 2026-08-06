@@ -23,10 +23,13 @@ which is for people *using* `pless`.
 | [0010](0010-data-in-an-encrypted-file-not-a-partition.md) | Put the data in an encrypted file, not a partition | Accepted |
 | [0011](0011-debian-and-ubuntu-as-equals.md) | Support Debian and Ubuntu as equals, with Debian 13 as the floor | Accepted |
 | [0012](0012-import-through-the-rest-api.md) | Import through the Paperless REST API, not the consume folder | Accepted |
-| [0013](0013-backup-offsite-and-drilled.md) | Back up off-site, at a different provider, and drill the restore | Accepted |
+| [0013](0013-backup-offsite-and-drilled.md) | Back up off-site, at a different provider, and drill the restore | Accepted, amended by 0017 and 0018 |
 | [0014](0014-secrets-never-in-argv.md) | Pass secrets on stdin, never in argv | Accepted |
 | [0015](0015-documentation-drift-is-a-build-failure.md) | Documentation drift is a build failure | Accepted |
 | [0016](0016-there-is-only-a-host.md) | There is only a host; provisioning is a separate, optional step | Accepted |
+| [0017](0017-tamper-resistance-in-the-bucket.md) | Tamper resistance lives in the bucket, not in the credential | Accepted |
+| [0018](0018-no-plaintext-copy-on-the-operators-machine.md) | A plaintext local copy is not a backup layer | Accepted |
+| [0019](0019-the-verification-record-lives-on-the-target.md) | The verification record lives on the target, and names a snapshot | Accepted |
 
 ## Writing a new one
 

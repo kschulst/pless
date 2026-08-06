@@ -1,7 +1,7 @@
-# Secrets — Bitwarden er source of truth, .env er kun lokal cache
+# Secrets — your password manager is the source of truth; .env is a local cache
 .env
 
-# Lokale data som aldri skal i git
+# Local data that must never reach git
 documents/
 backups/
 .pless/

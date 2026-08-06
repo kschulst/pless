@@ -256,10 +256,15 @@ interface would supply them without a file on disk.
     **The LUKS passphrase** — which `pless` never stores anywhere, including here. Lose it and
     the documents are gone.
 
-    **`RESTIC_PASSWORD`**, once backups exist. Lose it and the off-site backup is an encrypted
-    blob nobody can open, including you.
+    **`RESTIC_PASSWORD`**. Lose it and the off-site backup is an encrypted blob nobody can
+    open, including you.
 
     Both belong in your password manager the moment they exist.
+
+[**Secrets**](secrets.md) documents every one of these in full: what it protects, when it comes
+into existence, what happens if you lose it, and what happens if someone else gets it. Read it
+before you set up your password manager — the LUKS passphrase is not in the list above, by
+design, and it is the one that matters most.
 
 ## Secrets handling
 
