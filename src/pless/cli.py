@@ -699,17 +699,36 @@ def _storage_status_line(state: storage.StorageStatus) -> str:
 @storage_app.command("init")
 def storage_init(
     confirm: bool = typer.Option(False, "--confirm", help="Confirm formatting the data volume."),
+    generate: bool = typer.Option(
+        False,
+        "--generate",
+        help="Generate the passphrase in the documented format instead of choosing one.",
+    ),
 ) -> None:
     """Format the data volume as LUKS2 with ext4. Destructive."""
     cfg = config.load_config()
     target = _host(cfg)
     if not confirm:
         _fail("This FORMATS the data volume on the target. Run again with --confirm.")
-    passphrase = typer.prompt(
-        "Choose a LUKS passphrase (save it in your password manager FIRST)",
-        hide_input=True,
-        confirmation_prompt=True,
-    )
+
+    if generate:
+        passphrase = secretgen.human_passphrase()
+        # Shown once, before the volume exists. There is no second chance to
+        # print it, and no copy anywhere else.
+        console.print("\n[bold]Your LUKS passphrase — this is the only time it is shown:[/bold]\n")
+        console.print(f"    [bold cyan]{passphrase}[/bold cyan]\n")
+        console.print(
+            "[bold yellow]! Put it in your password manager before continuing. "
+            "Nothing else has a copy.[/bold yellow]"
+        )
+        if not typer.confirm("Saved it?", default=False):
+            _fail("Nothing was formatted. Run again when you are ready to save it.")
+    else:
+        passphrase = typer.prompt(
+            "Choose a LUKS passphrase (save it in your password manager FIRST)",
+            hide_input=True,
+            confirmation_prompt=True,
+        )
     try:
         device = storage.init(cfg, target, passphrase)
     except storage.StorageError as exc:
