@@ -130,6 +130,51 @@ HTTP check against Paperless on the target's localhost.
 
 SSH tunnel forwarding Paperless to `http://localhost:8000`. Ctrl-C closes it.
 
+## Backup
+
+### `pless backup init`
+
+Writes the backup script, its environment file, the systemd unit and the timer to the target,
+initialises the restic repository if it is new, and enables the timer.
+
+Requires `[backup] restic_repository` in `pless.toml` and `RESTIC_PASSWORD` in `.env` — plus
+`B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for a `b2:` repository. It names everything that is missing
+at once rather than one thing at a time.
+
+The environment file lands on the encrypted volume, mode 0600, owned by root, so it is
+unreadable whenever the volume is locked.
+
+!!! danger "No recovery"
+
+    `RESTIC_PASSWORD` is the second secret with no reset. Lose it and the repository is an
+    encrypted blob nobody can open, including you. Generate one with
+    `pless secrets generate` and save it in your password manager before running this.
+
+### `pless backup run`
+
+Runs a backup now: waits for Paperless's task queue to drain, dumps the database, exports the
+documents, and writes both into one restic snapshot.
+
+This invokes the same script the timer invokes, so what you test by hand is what runs unattended.
+
+If the encrypted volume is locked — the normal state after every reboot — it says so and stops,
+without failing. A backup that cries wolf after every reboot teaches you to ignore it.
+
+### `pless backup export`
+
+Runs Paperless's document exporter alone, leaving the result in `/opt/paperless/export` on the
+target. No snapshot, no database dump.
+
+Useful for inspecting what an export contains. It is not a backup: the export sits on the same
+machine as the archive.
+
+### `pless backup status [--json]`
+
+Repository kind, timer state, snapshot count, the newest snapshot, and how the last run ended.
+
+An empty repository is reported as a failure rather than as "nothing yet", because a repository
+that was silently recreated looks exactly like success and contains nothing.
+
 ## Access and security
 
 ### `pless tailscale up`
