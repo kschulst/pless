@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import secrets as pysecrets
 import shutil
 import subprocess
 import sys
 import tempfile
+from enum import StrEnum
 from pathlib import Path
 
 import typer
@@ -27,6 +27,7 @@ from pless import (
     hostspec,
     preflight,
     scaffold,
+    secretgen,
     sshexec,
     storage,
     tailscale,
@@ -47,6 +48,7 @@ storage_app = typer.Typer(help="Encrypted data volume on the target.", no_args_i
 deploy_app = typer.Typer(help="Deploy and operate the Paperless stack.", no_args_is_help=True)
 paperless_app = typer.Typer(help="Paperless application operations.", no_args_is_help=True)
 tailscale_app = typer.Typer(help="Tailscale access to the target.", no_args_is_help=True)
+secrets_app = typer.Typer(help="Generate secrets in the documented formats.", no_args_is_help=True)
 app.add_typer(hetzner_app, name="hetzner")
 app.add_typer(docs_app, name="docs")
 app.add_typer(server_app, name="server")
@@ -55,6 +57,7 @@ app.add_typer(storage_app, name="storage")
 app.add_typer(deploy_app, name="deploy")
 app.add_typer(paperless_app, name="paperless")
 app.add_typer(tailscale_app, name="tailscale")
+app.add_typer(secrets_app, name="secrets")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -104,9 +107,11 @@ def init(
     if with_secrets:
         content = env_path.read_text()
         generated: list[str] = []
+        # Machine secrets: nobody types these, so they are as long as the
+        # receiving software tolerates. See `pless secrets generate`.
         for key in ("PAPERLESS_ADMIN_PASSWORD", "PAPERLESS_SECRET_KEY", "POSTGRES_PASSWORD"):
             if f"{key}=\n" in content or content.rstrip().endswith(f"{key}="):
-                content = content.replace(f"{key}=", f"{key}={pysecrets.token_urlsafe(32)}", 1)
+                content = content.replace(f"{key}=", f"{key}={secretgen.machine_token()}", 1)
                 generated.append(key)
         env_path.write_text(content)
         if generated:
@@ -123,6 +128,37 @@ def init(
         "[bold]pless vm create[/bold] to have a local one made for you. "
         "Then [bold]pless doctor[/bold]."
     )
+
+
+class SecretKind(StrEnum):
+    # Which format a secret gets follows from who has to type it.
+    HUMAN = "human"
+    MACHINE = "machine"
+
+
+@secrets_app.command("generate")
+def secrets_generate(
+    kind: SecretKind = typer.Option(
+        SecretKind.HUMAN,
+        "--kind",
+        help="human: typed from a vault or paper. machine: never typed by anyone.",
+    ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress the reminder on stderr."),
+) -> None:
+    """Print one secret in the documented format, and nothing else.
+
+    Use `--kind human` for the LUKS passphrase and RESTIC_PASSWORD: both are
+    unrecoverable, so both are the ones you may one day read off paper.
+    """
+    value = secretgen.human_passphrase() if kind is SecretKind.HUMAN else secretgen.machine_token()
+    # Deliberately not console.print: no markup, no wrapping and no colour, so
+    # this can be piped straight into a password manager's CLI.
+    typer.echo(value)
+    if not quiet:
+        err_console.print(
+            "[yellow]•[/yellow] Save it now. pless keeps no copy, and terminal "
+            "scrollback is not a password manager."
+        )
 
 
 @app.command()

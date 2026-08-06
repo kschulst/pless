@@ -19,6 +19,26 @@ a Django secret key and a PostgreSQL password.
 Copy the generated values into your password manager immediately. `.env` is a local cache;
 your password manager is the source of truth.
 
+The generated values are machine secrets — 32 random bytes as base64url, because nobody has to
+type them. See [Secrets](secrets.md) for the formats and what each one costs you if it is lost.
+
+### `pless secrets generate [--kind human|machine] [--quiet]`
+
+Prints one secret in the documented format, and nothing else, so it can be piped straight into
+a password manager's CLI. A reminder goes to stderr unless you pass `--quiet`.
+
+`--kind human` (the default) produces a hyphenated Crockford base32 passphrase — the format for
+the LUKS passphrase and `RESTIC_PASSWORD`, which are unrecoverable and therefore the two you may
+one day read off a sheet of paper.
+
+`--kind machine` produces a base64url token for secrets no person types.
+
+```console
+$ pless secrets generate
+9K2M4-XR7TQ-B8HNV-5WGDC-3PFJZ
+• Save it now. pless keeps no copy, and terminal scrollback is not a password manager.
+```
+
 ### `pless doctor`
 
 Checks your local environment: Python version, `ssh`, `uv`, the config file, your SSH key,

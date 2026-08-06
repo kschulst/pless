@@ -29,7 +29,8 @@ nav = [
     "cookbook/switch-target.md" ] },
   { "Reference" = [
     "reference/commands.md",
-    "reference/configuration.md" ] } ]
+    "reference/configuration.md",
+    "reference/secrets.md" ] } ]
 
 [project.theme]
 language = "en"
