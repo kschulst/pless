@@ -311,7 +311,13 @@ fi
 
 STEP="dumping the database"
 log "$STEP"
-docker compose exec -T db pg_dump -U paperless -d paperless -Fc > "$STAGING/db.dump.new"
+# Authenticate explicitly rather than leaning on the image's default, which
+# trusts local socket connections. -h forces TCP, so the password is actually
+# checked; PGPASSWORD comes from the container's own environment, so the secret
+# never appears in argv on either machine (ADR 0014).
+docker compose exec -T db sh -c \\
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h 127.0.0.1 -U paperless -d paperless -Fc' \\
+  > "$STAGING/db.dump.new"
 mv "$STAGING/db.dump.new" "$STAGING/db.dump"
 
 STEP="exporting documents"
@@ -319,10 +325,12 @@ log "$STEP"
 docker compose exec -T webserver document_exporter /usr/src/paperless/export \\
   --no-progress-bar --split-manifest{delete_flag}
 
-# One JSON file per document is written beside it by --split-manifest, so this
-# counts documents rather than files, whatever the filename format is.
-DOCUMENTS=$(find "$EXPORT_DIR" -type f -name '*.json' \\
-  ! -name 'manifest.json' ! -name 'version.json' ! -name 'metadata.json' | wc -l | tr -d ' ')
+# --split-manifest writes "<document stem>-manifest.json" beside each document,
+# so this counts documents rather than files, whatever the filename format is
+# and whether or not an archive copy exists alongside the original. Matching
+# what we want beats excluding the top-level files we know about today, which
+# would miscount the moment Paperless adds another one.
+DOCUMENTS=$(find "$EXPORT_DIR" -type f -name '*-manifest.json' | wc -l | tr -d ' ')
 
 STEP="re-checking the queue"
 PENDING=$(queue_pending)

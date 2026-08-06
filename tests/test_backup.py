@@ -132,6 +132,26 @@ class TestRenderScript:
     def test_tags_snapshots_so_retention_can_find_them(self) -> None:
         assert f"--tag {backup.SNAPSHOT_TAG}" in backup.render_script(a_config())
 
+    def test_the_database_password_is_actually_checked(self) -> None:
+        # The Postgres image trusts local socket connections by default. Relying
+        # on that means the backup works until someone hardens the image, so the
+        # dump connects over TCP where the password is verified.
+        script = backup.render_script(a_config())
+        assert "-h 127.0.0.1" in script
+
+    def test_the_database_password_never_reaches_argv(self) -> None:
+        # It comes from the container's own environment, not from a command line
+        # any local user could read with ps (ADR 0014).
+        script = backup.render_script(a_config())
+        assert 'PGPASSWORD="$POSTGRES_PASSWORD"' in script
+
+    def test_documents_are_counted_by_matching_not_by_excluding(self) -> None:
+        # --split-manifest writes "<stem>-manifest.json" beside each document.
+        # Counting those is stable; excluding the top-level files we happen to
+        # know about would miscount as soon as Paperless adds another.
+        script = backup.render_script(a_config())
+        assert "-name '*-manifest.json'" in script
+
 
 class TestTheRenderedShellIsValid:
     """Generated shell that does not parse is a backup that never runs.
