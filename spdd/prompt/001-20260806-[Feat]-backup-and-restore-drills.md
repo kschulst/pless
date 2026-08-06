@@ -396,25 +396,42 @@ repository kind is a first-class citizen rather than a test fixture.
 5. Constraints: pure function of `cfg`; no timestamps, no secrets, no host-specific values, so it
    is snapshot-testable.
 
-### Create quiescence — `backup.parse_queue_state` and `backup.wait_for_quiescence`
+### Create quiescence — `backup.parse_queue_state`
+
+!!! note "Amended during Stage 1"
+
+    This originally specified a Python `wait_for_quiescence(cfg, target)` that polled over SSH.
+    Implementation showed that would be a **second implementation of the pipeline**: the systemd
+    timer needs the polling loop on the target anyway, and two copies of "when is it safe to
+    export?" drift within weeks. The loop now lives only in the rendered shell script, and
+    `pless backup run` invokes that same script. Python keeps the parser, which `backup status`
+    uses to show the queue.
 
 1. `parse_queue_state(text: str) -> QueueState`:
    - Input is the collected output of one round trip containing `##PENDING` (a Redis `LLEN celery`
      number) and `##ACTIVE` (Celery `inspect active` output).
    - Non-numeric or missing pending counts as unknown → `is_drained = False`, never True by
      default. `is_drained` is True only when both are explicitly zero.
-2. `wait_for_quiescence(cfg, target, poll_seconds: int = 10) -> QueueState`:
-   - Poll until `is_drained` holds on two consecutive polls, or
-     `cfg.backup.quiescence_timeout_seconds` elapses.
-   - On timeout raise `BackupError` naming the counts and saying plainly that the export was not
-     attempted because the exporter requires that nothing is being consumed.
-3. Collection command: `docker compose exec -T broker redis-cli -n 0 LLEN celery` and
-   `docker compose exec -T webserver celery -A paperless inspect active`, both through
-   `deploy.compose`-shaped invocation inside `INSTALL_DIR`.
+2. The polling loop lives in the rendered script: poll every 10 seconds until drained on two
+   consecutive polls — one empty poll can fall between two tasks — or
+   `cfg.backup.quiescence_timeout_seconds` elapses, at which point it writes a failed run record
+   saying the export was not attempted and exits non-zero.
+3. Collection commands: `docker compose exec -T broker redis-cli -n 0 LLEN celery` and
+   `docker compose exec -T webserver celery -A paperless inspect active`, both inside
+   `INSTALL_DIR`.
 
-### Implement the pipeline — `backup.run`
+### Implement the pipeline — the rendered script, invoked by `backup.run`
 
-1. Signature: `run(cfg: config.Config, target: Host) -> BackupRun`.
+!!! note "Amended during Stage 1"
+
+    The pipeline is implemented **once**, in the rendered shell script, because the timer has to
+    run it on the target with no `pless` installed. `backup.run(target)` invokes that script over
+    SSH and reads the record it leaves behind, so what the operator tests by hand is byte for
+    byte what runs unattended. The steps below describe the script.
+
+1. Signature: `run(target: Host, timeout: int = 21600) -> BackupRun`. Six hours, because a first
+   snapshot of several gigabytes over a domestic uplink is slow and aborting it halfway is worse
+   than waiting.
 2. Steps:
    - Precondition: `storage.status(cfg, target).is_mounted`; otherwise return a `BackupRun` with
      `outcome=SKIPPED_LOCKED` and a calm explanation. Not an exception — this is normal after a

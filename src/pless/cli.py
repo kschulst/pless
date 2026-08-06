@@ -16,6 +16,7 @@ from rich.table import Table
 from pless import (
     __version__,
     audit,
+    backup,
     bootstrap,
     composegen,
     config,
@@ -49,6 +50,7 @@ deploy_app = typer.Typer(help="Deploy and operate the Paperless stack.", no_args
 paperless_app = typer.Typer(help="Paperless application operations.", no_args_is_help=True)
 tailscale_app = typer.Typer(help="Tailscale access to the target.", no_args_is_help=True)
 secrets_app = typer.Typer(help="Generate secrets in the documented formats.", no_args_is_help=True)
+backup_app = typer.Typer(help="Back up the archive, and prove it restores.", no_args_is_help=True)
 app.add_typer(hetzner_app, name="hetzner")
 app.add_typer(docs_app, name="docs")
 app.add_typer(server_app, name="server")
@@ -58,6 +60,7 @@ app.add_typer(deploy_app, name="deploy")
 app.add_typer(paperless_app, name="paperless")
 app.add_typer(tailscale_app, name="tailscale")
 app.add_typer(secrets_app, name="secrets")
+app.add_typer(backup_app, name="backup")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -846,6 +849,158 @@ def paperless_health() -> None:
         console.print(f"[green]✓[/green] Paperless is answering (HTTP {code}).")
     else:
         _fail(f"Paperless is not answering as expected (HTTP {code}). See `pless deploy logs`.")
+
+
+@backup_app.command("init")
+def backup_init() -> None:
+    """Write the backup script, unit and timer to the target, and enable them."""
+    cfg = config.load_config()
+    sec = config.load_secrets()
+    target = _host(cfg)
+    try:
+        backup.install(cfg, sec, target)
+        created = backup.initialise_repository(target)
+    except (backup.BackupError, storage.StorageError) as exc:
+        _fail(str(exc))
+        return
+
+    kind = cfg.backup.repository_kind
+    if created:
+        console.print(f"[green]✓[/green] Initialised a new restic repository ({kind}).")
+    else:
+        console.print(f"[green]✓[/green] Using the existing restic repository ({kind}).")
+    console.print(
+        f"[green]✓[/green] Timer enabled: backups run [bold]{cfg.backup.schedule}[/bold]."
+    )
+    console.print(
+        "[bold yellow]! RESTIC_PASSWORD has no recovery path. Without it this repository "
+        "is an encrypted blob nobody can open, including you. Save it in your password "
+        "manager now.[/bold yellow]"
+    )
+    if cfg.backup.is_local_repository:
+        console.print(
+            "[yellow]•[/yellow] This is a local repository. It protects against deletion "
+            "and corruption, and not at all against losing the machine — which is the "
+            "thing backup exists for."
+        )
+
+
+@backup_app.command("run")
+def backup_run() -> None:
+    """Run a backup now: quiesce, dump the database, export, and snapshot."""
+    cfg = config.load_config()
+    target = _host(cfg)
+    console.print("Running the backup. A first snapshot can take hours…")
+    try:
+        record = backup.run(target)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    match record.outcome:
+        case backup.RunOutcome.SKIPPED_LOCKED:
+            console.print(f"[yellow]•[/yellow] Skipped: {record.detail}")
+        case backup.RunOutcome.SUCCEEDED:
+            console.print(
+                f"[green bold]✓ {record.documents_exported} documents in snapshot "
+                f"{record.snapshot_id[:8]}.[/green bold]"
+            )
+            if record.queue_moved_during_run:
+                console.print(
+                    "[yellow]•[/yellow] Documents were consumed while the export ran, so the "
+                    "snapshot may not include the very latest. The next run picks them up."
+                )
+        case _:
+            _fail(
+                f"The backup failed: {record.detail} "
+                "See `journalctl -u pless-backup.service` on the target."
+            )
+
+
+@backup_app.command("export")
+def backup_export() -> None:
+    """Run Paperless's document exporter on the target, without a snapshot."""
+    cfg = config.load_config()
+    target = _host(cfg)
+    console.print("Exporting documents. Nothing must be consuming while this runs…")
+    try:
+        backup.export_only(cfg, target)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+    console.print(
+        f"[green]✓[/green] Exported to {composegen.INSTALL_DIR}/export on the target — "
+        "on the encrypted volume, not in a snapshot."
+    )
+
+
+@backup_app.command("status")
+def backup_status(
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
+) -> None:
+    """Repository, last run, snapshots and timer state."""
+    cfg = config.load_config()
+    target = _host(cfg)
+
+    if not cfg.backup.is_configured:
+        _fail(
+            "[backup] restic_repository is empty, so nothing is being backed up. "
+            "Set it in pless.toml and run `pless backup init`."
+        )
+
+    try:
+        record = backup.read_run_record(target)
+        snaps = backup.snapshots(target)
+        timer = backup.timer_state(target)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    latest = backup.latest_snapshot(snaps)
+    if json_output:
+        console.print_json(
+            data={
+                "repository_kind": cfg.backup.repository_kind,
+                "timer": timer,
+                "snapshots": len(snaps),
+                "latest_snapshot": latest.id if latest else None,
+                "latest_snapshot_time": latest.time if latest else None,
+                "last_run": {
+                    "outcome": str(record.outcome),
+                    "finished_at": record.finished_at,
+                    "documents_exported": record.documents_exported,
+                    "snapshot_id": record.snapshot_id,
+                    "queue_moved_during_run": record.queue_moved_during_run,
+                }
+                if record
+                else None,
+            }
+        )
+        return
+
+    console.print(f"Repository: {cfg.backup.repository_kind}")
+    console.print(f"Timer: {timer} ({cfg.backup.schedule})")
+    console.print(f"Snapshots: {len(snaps)}")
+    if latest:
+        console.print(f"Latest: {latest.short_id} at {latest.time}")
+    else:
+        console.print(
+            "[red]✗[/red] No snapshots tagged pless. Either nothing has been backed up "
+            "yet, or the repository was recreated — the second looks like success and "
+            "contains nothing."
+        )
+    if record is None:
+        console.print("[yellow]•[/yellow] No run has been recorded on the target yet.")
+    elif record.succeeded:
+        console.print(
+            f"[green]✓[/green] Last run {record.finished_at}: "
+            f"{record.documents_exported} documents, snapshot {record.snapshot_id[:8]}."
+        )
+    else:
+        console.print(
+            f"[red]✗[/red] Last run {record.finished_at or '(unfinished)'}: "
+            f"{record.outcome} — {record.detail}"
+        )
 
 
 @app.command()

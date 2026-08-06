@@ -48,8 +48,30 @@ local_documents = "./documents"
 local_backups = "./backups"
 
 [backup]
-# Empty disables off-site backup. Set to e.g. "b2:my-bucket:paperless" once ready.
+# Empty disables off-site backup. Anything restic understands works: a local
+# path for testing, "b2:<bucket>:paperless" for the real off-site layer, or an
+# rclone remote. pless passes it through rather than knowing about providers.
 restic_repository = ""
+
+schedule = "daily"              # systemd OnCalendar for the backup timer
+verify_schedule = "weekly"      # how often a restore is verified automatically
+verify_sample_size = 20         # files hashed per content verification
+verify_max_age_days = 14        # older than this and preflight says "not verified"
+
+quiescence_timeout_seconds = 900  # how long to wait for the task queue to drain
+
+# How much history survives `pless backup forget --prune`, which is a manual,
+# deliberate act and never runs on a timer.
+retention_daily = 7
+retention_weekly = 8
+retention_monthly = 12
+retention_yearly = 3
+
+# What the bucket's lifecycle rule is expected to keep, so a compromised
+# machine cannot destroy history. pless audits this; it never sets it.
+version_retention_days = 90
+
+exporter_delete = false         # pass --delete to document_exporter
 
 # --- Optional: ways to obtain a host, rather than kinds of host -------------
 
