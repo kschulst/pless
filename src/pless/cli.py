@@ -567,7 +567,7 @@ def preflight_cmd(
     cfg = config.load_config()
     target = _host(cfg)
 
-    reachable = sshexec.run(target.user, target.host, target.key, "true", port=target.port).ok
+    reachable = sshexec.run(target.ssh_args, "true").ok
 
     storage_ready = False
     if reachable:
