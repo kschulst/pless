@@ -186,10 +186,63 @@ Directories on *your* machine, not the target.
 
 ```toml
 [backup]
-restic_repository = ""   # e.g. "b2:my-bucket:paperless"
+restic_repository = ""            # empty disables backup
+
+schedule = "daily"                # systemd OnCalendar for the backup timer
+verify_schedule = "weekly"        # how often a restore is verified automatically
+verify_sample_size = 20           # files hashed per content verification
+verify_max_age_days = 14          # older than this and preflight says "not verified"
+
+quiescence_timeout_seconds = 900  # how long to wait for the task queue to drain
+
+retention_daily = 7
+retention_weekly = 8
+retention_monthly = 12
+retention_yearly = 3
+
+version_retention_days = 90       # what the bucket lifecycle rule must keep
+
+exporter_delete = false           # pass --delete to document_exporter
 ```
 
-Reserved for [backup](https://github.com/kschulst/pless/issues/2), which is not built yet.
+`restic_repository` is passed to restic unchanged. Anything restic understands works:
+
+| Value | Kind |
+|---|---|
+| `/mnt/backup/restic` | A local directory |
+| `b2:<bucket>:paperless` | Backblaze B2 — the off-site layer |
+| `s3:s3.example.com/<bucket>` | Any S3-compatible storage |
+| `rclone:dropbox:paperless` | Anything rclone can reach |
+
+`pless` deliberately has no provider abstraction, so a backend it has never heard of works as
+long as restic supports it.
+
+!!! warning "A local repository is for testing"
+
+    A repository on the same disk protects against accidental deletion and corruption. It is no
+    protection at all against the machine being lost, stolen or burnt — which is what backup
+    exists for. It is a first-class option because it makes the whole flow, including the
+    restore drill, testable without a cloud account.
+
+**Schedules** are systemd `OnCalendar` expressions — `daily`, `weekly`, `Mon *-*-* 03:00:00`.
+The timer is `Persistent=true`, so a machine that was asleep at the scheduled time backs up when
+it wakes.
+
+**Retention** is applied by `pless backup forget`, which is a manual, deliberate act and never
+runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--keep-weekly`,
+`--keep-monthly` and `--keep-yearly`.
+
+**`version_retention_days`** is not something `pless` sets. It is what the bucket's lifecycle
+rule is expected to keep, so that a compromised machine deleting its own snapshots still leaves
+recoverable versions behind. `pless audit` checks the bucket against this number. See
+[ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md).
+
+**`exporter_delete`** is off by default: `pless` does not delete things you did not ask it to
+delete. Turning it on keeps the export directory from growing, at the cost of a partially failed
+run having already removed files.
+
+The secrets this section needs — `RESTIC_PASSWORD`, `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` — are
+documented in [Secrets](secrets.md).
 
 ## Optional: getting a machine
 

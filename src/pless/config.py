@@ -152,7 +152,56 @@ class PathsConfig(BaseModel):
 
 
 class BackupConfig(BaseModel):
-    restic_repository: str = ""
+    """Where snapshots go, how often, and how much history survives.
+
+    The repository is an opaque restic location, not a typed backend. restic
+    already speaks local paths, S3/B2 and — through rclone — much else, so
+    treating it as a string keeps pless out of the storage-backend business.
+    """
+
+    restic_repository: str = ""  # empty disables backup
+
+    schedule: str = "daily"  # systemd OnCalendar for the backup timer
+    verify_schedule: str = "weekly"  # systemd OnCalendar for content verification
+    verify_sample_size: int = 20  # files hashed per content verification
+    verify_max_age_days: int = 14  # older than this and preflight says "not verified"
+
+    quiescence_timeout_seconds: int = 900  # how long to wait for the task queue to drain
+
+    retention_daily: int = 7
+    retention_weekly: int = 8
+    retention_monthly: int = 12
+    retention_yearly: int = 3
+
+    # What the bucket's lifecycle rule is expected to keep. pless audits this;
+    # it never applies it, because a key that could would defeat the point.
+    version_retention_days: int = 90
+
+    exporter_delete: bool = False  # pass --delete to document_exporter
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.restic_repository)
+
+    @property
+    def repository_kind(self) -> str:
+        """'b2', 's3', 'local'… — the kind, never the location.
+
+        Used where naming the location would put a bucket name somewhere it
+        does not belong, and to say plainly that a local repository protects
+        against deletion and corruption but not against losing the machine.
+        """
+        if not self.restic_repository:
+            return "unset"
+        scheme, separator, _ = self.restic_repository.partition(":")
+        # A Windows-style drive letter is not a scheme, and neither is a path.
+        if separator and scheme and scheme.isalnum() and len(scheme) > 1:
+            return scheme.lower()
+        return "local"
+
+    @property
+    def is_local_repository(self) -> bool:
+        return self.repository_kind == "local"
 
 
 class Config(BaseModel):

@@ -42,6 +42,9 @@ PACKAGES = [
     "unattended-upgrades",
     "cryptsetup-bin",
     "curl",
+    # Backup runs on the target, so restic lives there. Both Debian 13 and
+    # Ubuntu 24.04 carry it in the main archive; no third-party repository.
+    "restic",
 ]
 
 # The Docker packages differ between the distributions. Both verified
