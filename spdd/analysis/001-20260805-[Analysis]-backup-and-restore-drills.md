@@ -117,6 +117,80 @@
 > - Whether the local-directory repository should also be offered on the operator's machine,
 >   pulled over SSH.
 
+## Resolutions (grilling session, 2026-08-06)
+
+Six items were open when this analysis was written. All are now settled, and one
+settled *against* what the requirements originally specified.
+
+### The no-delete credential is withdrawn
+
+**restic cannot work with a credential that lacks delete permission.** It creates and
+removes files in `locks/` during ordinary backups, and
+[complains loudly without that right](https://github.com/restic/restic/issues/3491);
+`restic unlock` cannot clean up afterwards either, for the same reason. There are open
+issues and pull requests, nothing merged. The `--no-lock` workaround exists but removes
+protection against concurrent operations, and this design has both a timer and manual
+verification runs against the same repository.
+
+So tamper resistance moves from the credential to the storage layer.
+
+### Tamper resistance: B2 versioning with a lifecycle rule
+
+The target holds a key with full read/write/delete on **one bucket**, and no capability to
+change bucket settings. The bucket has versioning enabled and a lifecycle rule retaining
+deleted versions for a configurable period, defaulting to **90 days**.
+
+An attacker who takes the machine can therefore delete — and the versions survive, in an
+account they have no access to. restic runs unmodified, and setup is two clicks in B2 plus
+three lines of documentation.
+
+Cost is not a factor: B2 is $6/TB/month with the first 10 GB free, and an archive of a few
+gigabytes with versioning lands under that. Restoring is free too, since egress up to three
+times stored volume is included. A second cloud provider was considered and rejected — it
+would double the configuration and the failure modes, not the cost, for a scenario the local
+mirror already covers.
+
+### A plaintext local copy is not a backup layer
+
+An earlier draft argued for downloading the export to the operator's machine as protection
+against losing `RESTIC_PASSWORD`. That was wrong twice over: it puts readable documents on a
+laptop, undermining the guarantee the whole design exists to provide, and it hedges against
+a failure mode we already accept deliberately for the LUKS passphrase
+([ADR 0001](../../adr/0001-encrypt-data-key-never-on-the-machine.md)). Both passphrases live
+in a password manager, and losing either means losing the data. Being inconsistent about that
+would weaken the primary guarantee to soften a secondary one.
+
+Two distinct operations replace it:
+
+- **Extract** — pull documents out of a backup to a local directory, in the clear. An
+  inspection and escape-hatch tool: deliberate, on demand, never scheduled, and warning
+  plainly about what it leaves on disk.
+- **Mirror** — copy the repository to another location (external disk, another provider),
+  still encrypted end to end. This is the answer to "what if the B2 account is lost".
+
+### Quiescence: wait for the queue to drain
+
+Paperless has no pause API; the
+[documentation](https://docs.paperless-ngx.com/administration/) only says nothing must be
+consuming. Since import goes through the REST API
+([ADR 0012](../../adr/0012-import-through-the-rest-api.md)), the task queue is the real
+signal. Poll until it is empty, with a timeout that fails loudly rather than exporting
+anyway. No downtime.
+
+### Verification runs automatically, weekly by default
+
+Content verification on its own timer: restore the latest snapshot to a scratch area, compare
+a sample, record the result where `preflight` can read it. The full restore rehearsal into a
+throwaway VM stays manual and occasional. Cadence is configurable.
+
+### Configurable, with reasonable defaults
+
+Stated as a general principle, not only for this feature: **the operator configures the
+behaviour, and every setting ships with a sensible default.** Retention, verification cadence
+and version-retention window are all settings rather than constants. This also determines
+what a future web interface has to expose, so choosing constants now would be choosing them
+twice.
+
 ## Domain Concept Identification
 
 ### Existing Concepts (from codebase)
@@ -272,10 +346,8 @@ without a machine ([ADR 0009](../../adr/0009-cli-is-a-library-with-a-terminal-fr
 
 ### Requirement Ambiguities
 
-- **What "ensure quiescence" means concretely**: the requirement states it must be ensured and
-  must fail loudly, but Paperless's actual mechanism for pausing consumption is not
-  established. This must be resolved before design, because it determines whether a backup run
-  can be non-disruptive at all.
+- ~~**What "ensure quiescence" means concretely**~~ — **resolved.** No pause API exists; poll
+  the task queue until it drains, with a timeout that fails loudly. See Resolutions.
 - **Where the verification record lives, and whose word it is**: `preflight` needs a durable
   answer, but a record stored on the target is trusted exactly as much as the target. Whether
   that is acceptable, or whether the operator's machine should hold it, is unsettled.
@@ -309,13 +381,14 @@ without a machine ([ADR 0009](../../adr/0009-cli-is-a-library-with-a-terminal-fr
 
 ### Technical Risks
 
-- **A no-delete credential may break restic's own locking.** restic creates and removes lock
-  files during normal operation. With a credential that cannot delete, stale locks may
-  accumulate and eventually block backups — the failure would appear weeks later, as backups
-  silently stopping. **This is the highest-impact unknown in the design and must be verified
-  experimentally against a real B2 restricted key before the canvas commits to it.** Mitigation
-  directions if confirmed: lock cleanup as part of the operator-side retention run, or a
-  rest-server-style append-only proxy instead of a restricted key.
+- ~~**A no-delete credential may break restic's own locking.**~~ **Confirmed, and resolved.**
+  restic requires delete permission on `locks/` during ordinary backups. The credential-based
+  approach is withdrawn; tamper resistance now comes from B2 versioning and a lifecycle rule.
+  See Resolutions.
+- **Bucket settings become the security boundary.** The protection now rests on the target's
+  key being unable to change versioning or lifecycle configuration. That is a property of how
+  the key is created, and an operator can get it wrong invisibly — which is why it belongs in
+  `audit` rather than in a setup instruction nobody rereads.
 - **restic is not in the host spec.** Adding it is small, but it is a new package and a new
   version surface on both supported distributions.
 - **Dropbox as a repository requires rclone and an OAuth flow**, which is awkward on a headless
@@ -342,9 +415,10 @@ without a machine ([ADR 0009](../../adr/0009-cli-is-a-library-with-a-terminal-fr
 | 5 | Originals and metadata separable | Yes | A property of the exporter's layout; needs a test asserting it rather than trusting it |
 | 6 | Backups must support encryption | Yes | restic is encrypted by construction; `RESTIC_PASSWORD` becomes a second unrecoverable secret |
 | 7 | Explore alternative locations such as Dropbox | Partial | Reachable through rclone, but the OAuth flow on a headless machine is materially harder than B2 — belongs in documentation with that caveat stated, not as an equal option |
+| 7b | Mirror the repository to another location | Yes | `restic copy`; the answer to losing the B2 account, and it keeps everything encrypted |
 | 8 | Local-directory repository as a first-class kind | Yes | The enabler for CI and throwaway-VM drills |
-| 9 | Machine holds a credential that cannot delete | **At risk** | Depends entirely on the restic locking question above |
-| 10 | Retention runs from the operator's machine | Yes | Follows from AC 9; needs a separate privileged credential that never reaches the target |
+| 9 | ~~Machine holds a credential that cannot delete~~ | **Withdrawn** | restic requires delete on `locks/`. Replaced by B2 versioning plus a lifecycle rule — see Resolutions |
+| 10 | Retention runs from the operator's machine | Optional | No longer forced by AC 9. Retention may run on the target now that versioning protects history; keeping it operator-side remains a defensible extra step |
 | 11 | `pless backup verify` — content comparison | Yes | Comparison baseline needs pinning down |
 | 12 | `pless backup verify` — full restore rehearsal into a throwaway VM | Yes | Couples backup to the `vm` module; only meaningful with a local or reachable repository |
 | 13 | `preflight` wired to a real verification result | Yes | Requires the verification-record concept; trust boundary noted above |
