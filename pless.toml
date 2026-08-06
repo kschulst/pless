@@ -5,8 +5,11 @@
 # a Raspberry Pi, a VM on your hypervisor, an old laptop, a droplet at any
 # provider. How it came into existence is not pless's concern.
 [host]
-ssh_config = "~/.lima/pless-dev/ssh.config"
-ssh_alias = "lima-pless-dev"
+# Written by pless. The referenced file tracks the machine's
+# current address, so a restart cannot leave this stale.
+ssh_config = "/Users/kenneth/.lima/pless-drill/ssh.config"
+ssh_alias = "lima-pless-drill"
+
 
 # Alternatively, point at an SSH config entry instead of the details above.
 # This is what `pless vm create` writes, and what you want if your setup
@@ -49,7 +52,7 @@ local_backups = "./backups"
 # Empty disables off-site backup. Anything restic understands works: a local
 # path for testing, "b2:<bucket>:paperless" for the real off-site layer, or an
 # rclone remote. pless passes it through rather than knowing about providers.
-restic_repository = ""
+restic_repository = "/var/lib/pless/restic-drill"
 
 schedule = "daily"              # systemd OnCalendar for the backup timer
 verify_schedule = "weekly"      # how often a restore is verified automatically
@@ -76,7 +79,7 @@ exporter_delete = false         # pass --delete to document_exporter
 # `pless vm create` makes a local VM and points [host] at it.
 [vm]
 backend = "lima"      # "lima" = Debian + bootstrap; "multipass" = Ubuntu + cloud-init
-name = "pless-dev"
+name = "pless-drill"
 cpus = 2
 memory = "4G"
 disk = "20G"
