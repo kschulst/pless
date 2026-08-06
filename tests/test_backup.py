@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from pless import backup, config
+from pless import backup, composegen, config
 
 
 def a_config(**backup_overrides) -> config.Config:
@@ -195,13 +195,28 @@ class TestRenderUnits:
         units = backup.render_units(a_config())
         assert set(units) == {backup.SERVICE_UNIT, backup.TIMER_UNIT}
 
-    def test_the_unit_refuses_to_run_without_the_volume(self) -> None:
-        units = backup.render_units(a_config())
-        assert "RequiresMountsFor=/opt/paperless" in units[backup.SERVICE_UNIT]
-
     def test_a_skip_counts_as_success(self) -> None:
         units = backup.render_units(a_config())
         assert f"SuccessExitStatus={backup.EXIT_SKIPPED}" in units[backup.SERVICE_UNIT]
+
+    def test_the_unit_does_not_depend_on_the_mount(self) -> None:
+        # RequiresMountsFor would turn "the volume is locked" — the normal state
+        # after every reboot — into a dependency failure, which is exactly the
+        # alarm this design exists to avoid. The script checks the mount itself.
+        units = backup.render_units(a_config())
+        assert "RequiresMountsFor" not in units[backup.SERVICE_UNIT]
+
+    def test_the_unit_runs_a_script_that_survives_a_locked_volume(self) -> None:
+        # Found by drilling on a VM: with the script on the encrypted volume,
+        # sh exits 2 before SuccessExitStatus can apply, and the unit lands in
+        # 'failed' after every single reboot.
+        units = backup.render_units(a_config())
+        assert not backup.SCRIPT_PATH.startswith(composegen.INSTALL_DIR)
+        assert f"ExecStart=/bin/sh {backup.SCRIPT_PATH}" in units[backup.SERVICE_UNIT]
+
+    def test_the_environment_file_stays_on_the_encrypted_volume(self) -> None:
+        # It holds RESTIC_PASSWORD, so it must be unreadable while locked.
+        assert backup.ENV_FILE.startswith(composegen.INSTALL_DIR)
 
     def test_the_schedule_is_configurable(self) -> None:
         units = backup.render_units(a_config(schedule="Mon *-*-* 03:00:00"))
