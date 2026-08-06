@@ -65,6 +65,9 @@ pless vm destroy --confirm
   carry a database across a migration nobody chose.
 - **Be honest in the docs.** Features that do not exist are listed as not existing. A status
   table beats a promise.
+- **Configurable, with reasonable defaults.** Retention windows, schedules, thresholds and
+  sizes are settings the operator can change, shipped with a default that works. Hardcoding
+  them means choosing twice, because a future web interface has to expose the same choices.
 
 ## Checks
 
