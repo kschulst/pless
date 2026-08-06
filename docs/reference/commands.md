@@ -75,13 +75,17 @@ Interactive SSH session on the active target.
 
 ## Storage
 
-### `pless storage init --confirm`
+### `pless storage init --confirm [--generate]`
 
 Formats the data volume as LUKS2 with ext4 and mounts it at `/opt/paperless`.
 **Destructive** — it refuses to overwrite an existing LUKS volume.
 
 Asks for a passphrase twice. The cipher is chosen automatically: AES-XTS where the CPU has
 AES instructions, Adiantum otherwise.
+
+With `--generate`, `pless` produces one in the [documented human format](secrets.md#format)
+instead, shows it once, and asks you to confirm you have saved it before formatting anything.
+Answering no formats nothing.
 
 !!! danger "No recovery"
 

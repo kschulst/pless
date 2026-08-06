@@ -132,6 +132,10 @@ as you can, and treat the archive as read by someone else in the meantime.
 `cryptsetup luksChangeKey` over SSH replaces it without re-encrypting anything. There is no
 `pless` command for this yet.
 
+**Where it comes from.** `pless storage init --confirm` asks you to choose one.
+`pless storage init --confirm --generate` produces one in the format above instead, shows it
+once, and refuses to format anything until you confirm you have saved it.
+
 **Prove you have it** with `pless preflight --drill`, which locks and unlocks the volume for
 real. Do it while the volume is empty, when being wrong is free.
 
