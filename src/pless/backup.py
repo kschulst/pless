@@ -29,8 +29,16 @@ from pless.targets import Host
 STAGING_DIR = f"{composegen.INSTALL_DIR}/backups"
 EXPORT_DIR = f"{composegen.INSTALL_DIR}/export"
 ENV_FILE = f"{composegen.INSTALL_DIR}/backup.env"
-SCRIPT_PATH = f"{composegen.INSTALL_DIR}/pless-backup.sh"
 RUN_RECORD = f"{STAGING_DIR}/last-run.json"
+
+# The script lives on the root filesystem, not on the encrypted volume. It has
+# to be able to run *while the volume is locked* in order to report a calm skip;
+# a script that is itself unreachable makes the unit fail after every reboot,
+# which is the alarm fatigue this design exists to avoid. The environment file
+# stays on the encrypted volume, because that one holds a secret, and the script
+# only sources it after confirming the volume is mounted.
+SCRIPT_DIR = "/usr/local/lib/pless"
+SCRIPT_PATH = f"{SCRIPT_DIR}/pless-backup.sh"
 
 SERVICE_UNIT = "/etc/systemd/system/pless-backup.service"
 TIMER_UNIT = "/etc/systemd/system/pless-backup.timer"
@@ -354,18 +362,20 @@ log "done: $DOCUMENTS documents, snapshot $SNAPSHOT_ID"
 
 def render_units(cfg: config.Config) -> dict[str, str]:
     """Unit and timer, keyed by their absolute path on the target."""
+    # Deliberately no RequiresMountsFor: it would turn "the volume is locked"
+    # into a dependency failure, which is the alarm we are trying not to raise.
+    # The script checks the mount itself and exits EXIT_SKIPPED, which systemd
+    # is told to treat as success.
     service = f"""\
 [Unit]
 Description=pless backup (export, database dump, restic snapshot)
 After=paperless.service
-# Refuses to run unless the encrypted volume is mounted.
-RequiresMountsFor={composegen.INSTALL_DIR}
 
 [Service]
 Type=oneshot
-WorkingDirectory={composegen.INSTALL_DIR}
 ExecStart=/bin/sh {SCRIPT_PATH}
-# A locked volume is a skip, not a failure.
+# A locked volume is a skip, not a failure. The volume is locked after every
+# reboot, so this is a routine outcome and must not mark the unit failed.
 SuccessExitStatus={EXIT_SKIPPED}
 """
     timer = f"""\
@@ -483,7 +493,7 @@ def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
         )
 
     environment = render_backup_env(cfg, secrets)  # raises before anything is written
-    _run_ok(target, f"sudo mkdir -p {STAGING_DIR} {EXPORT_DIR}")
+    _run_ok(target, f"sudo mkdir -p {STAGING_DIR} {EXPORT_DIR} {SCRIPT_DIR}")
     _write_remote_file(target, ENV_FILE, environment, mode="0600")
     _write_remote_file(target, SCRIPT_PATH, render_script(cfg), mode="0700")
     for path, content in render_units(cfg).items():
