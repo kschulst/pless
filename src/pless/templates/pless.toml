@@ -67,8 +67,9 @@ retention_weekly = 8
 retention_monthly = 12
 retention_yearly = 3
 
-# What the bucket's lifecycle rule is expected to keep, so a compromised
-# machine cannot destroy history. pless audits this; it never sets it.
+# Reserved. A lifecycle window does NOT stop a compromised machine destroying
+# history: restic needs delete permission, and on B2 that permits permanent
+# version deletion. See ADR 0017 — the mechanism is unresolved.
 version_retention_days = 90
 
 exporter_delete = false         # pass --delete to document_exporter
