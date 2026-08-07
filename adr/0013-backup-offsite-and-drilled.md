@@ -2,9 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-17
-- **Status note:** amended by [0017](0017-tamper-resistance-in-the-bucket.md), which specifies how
-  the off-site copy resists tampering, and [0018](0018-no-plaintext-copy-on-the-operators-machine.md),
-  which withdraws the export "pulled down to the operator's machine" described below
+- **Status note:** amended by [0018](0018-no-plaintext-copy-on-the-operators-machine.md), which
+  withdraws the export "pulled down to the operator's machine" described below. How the off-site
+  copy resists tampering is unresolved — see
+  [0017](0017-tamper-resistance-in-the-bucket.md), which establishes that no credential the
+  machine holds can provide it
 
 ## Context
 

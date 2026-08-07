@@ -171,21 +171,31 @@ those are already encrypted before they leave the machine.
 
 **If you lose them.** Create a new application key in the B2 console. Nothing is lost.
 
-**If someone else gets them.** They can delete your snapshots — but not the versions
-underneath. The bucket keeps deleted versions for `version_retention_days` (90 by default) in
-an account the key cannot reach
-([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)).
-Delete the key in the console, create a new one, and check the versions are still there.
+**If someone else gets them.** They can permanently destroy every snapshot in the bucket.
 
-!!! warning "Reissuing is where this goes wrong"
+!!! danger "The machine's key can delete the backup, and this is not yet solved"
 
-    A replacement key must be scoped exactly like the original: **one bucket**, and no
-    capability to change bucket settings — no `writeBuckets`, `deleteBuckets`,
-    `writeBucketRetentions`, `writeKeys` or `deleteKeys`. The console offers a full-access key
-    by default, and a full-access key on the target silently removes the protection that makes
-    versioning worth having.
+    restic creates and removes files in `locks/` during an ordinary backup, so the key on the
+    machine must have B2's `deleteFiles` capability. That capability authorises
+    [`b2_delete_file_version`](https://www.backblaze.com/docs/cloud-storage-file-versions),
+    which removes a specific version **permanently** — "as if you never uploaded that
+    version". Bucket versioning and a lifecycle rule do not prevent this: they govern
+    *automatic* cleanup of hidden and superseded versions, not explicit deletion.
 
-    `pless audit` checks this and fails when the key is too powerful. Run it after any change.
+    So whoever holds the machine can enumerate every version and delete it. Until
+    [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
+    settles on a mechanism that actually enforces retention — Object Lock is the likely
+    answer — **treat the off-site copy as destroyable by anyone who takes the machine**, and
+    keep a second copy somewhere the machine has no credentials for.
+
+    Scope the key to a single bucket anyway, with no `writeBuckets`, `deleteBuckets`,
+    `writeBucketRetentions`, `writeKeys` or `deleteKeys`. That limits the blast radius to one
+    bucket and stops the key reconfiguring the bucket itself. It does not make the data
+    undeletable, and this page will not pretend otherwise.
+
+**Reissuing.** Create a replacement in the B2 console scoped the same way — one bucket, no
+bucket-settings capabilities. The console offers a full-access key by default.
+
 
 **The master application key** — the one B2 gives you when you create the account — never goes
 on the machine. Keep it in your vault; it is what you use to fix things after a compromise.
@@ -269,5 +279,8 @@ Files holding secrets on the target are written mode 0600, owned by root, on the
 volume. They are unreadable whenever the volume is locked — which is whenever the machine is
 powered off, or in someone else's hands.
 
-`pless` prints no secret, and neither `pless audit --json` nor any record it writes contains
-one.
+`pless` never displays a secret it has stored or received. The one thing it does print is a
+freshly generated value from `pless secrets generate` and `pless storage init --generate`,
+which exist precisely so you can put that value somewhere safe — it is shown once, at the
+moment it comes into existence, and never again. Neither `pless audit --json` nor any record
+`pless` writes contains a secret.
