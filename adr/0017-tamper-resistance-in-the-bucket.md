@@ -1,6 +1,6 @@
-# 0017 — Tamper resistance lives in the bucket, not in the credential
+# 0017 — A credential the machine holds cannot protect the archive from the machine
 
-- **Status:** Accepted
+- **Status:** Proposed — the constraint is established; the mechanism is not chosen
 - **Date:** 2026-08-06
 - **Context references:** issue #2; amends [0013](0013-backup-offsite-and-drilled.md)
 
@@ -8,64 +8,77 @@
 
 [ADR 0005](0005-the-local-network-is-hostile.md) assumes the machine can be compromised or
 stolen. Whoever has it also has every credential stored on it, so a backup credential with full
-access means an attacker deletes the archive and its rescue in one operation. The obvious
-answer is a key that can write but not delete: an attacker can then only add.
+access means an attacker deletes the archive and its rescue in one operation.
 
-That answer does not survive contact with restic. restic creates and removes files in `locks/`
-during an ordinary backup, and [complains loudly without the right to do
-so](https://github.com/restic/restic/issues/3491); `restic unlock` cannot clean up afterwards
-either, for the same reason. There are open issues and pull requests, and nothing merged. The
-`--no-lock` workaround removes protection against concurrent operations — and this design has a
-backup timer and a verification timer running against the same repository.
+Two candidate answers have now been tested against reality, and both fail.
 
-So the property has to come from somewhere other than the credential.
+**A key that cannot delete.** The obvious answer: let the machine write and never remove. It
+does not survive contact with restic, which creates and removes files in `locks/` during an
+ordinary backup and [complains loudly without the right to do
+so](https://github.com/restic/restic/issues/3491). `restic unlock` cannot clean up afterwards
+either. The `--no-lock` workaround removes protection against concurrent operations, and this
+design runs a backup timer and a verification timer against the same repository.
+
+**Versioning plus a lifecycle rule.** The next answer, and the one this record originally
+claimed: give the machine `deleteFiles`, enable bucket versioning, and let a lifecycle rule
+retain deleted versions for 90 days, so an attacker can delete only what is current.
+
+That is wrong. B2's `deleteFiles` capability authorises
+[`b2_delete_file_version`](https://www.backblaze.com/docs/cloud-storage-application-key-capabilities),
+which deletes a specific version [permanently — "as if you never uploaded that
+version"](https://www.backblaze.com/docs/cloud-storage-file-versions). Lifecycle rules govern
+*automatic* cleanup of hidden and superseded versions; they are not a barrier to explicit
+deletion. An attacker with the machine's key can list every version and delete every one.
 
 ## Decision
 
-The target holds a Backblaze B2 application key with full read, write and delete on **one
-bucket**, and no capability to change bucket settings — no `writeBuckets`, `deleteBuckets`,
-`writeBucketRetentions`, `writeKeys` or `deleteKeys`.
+What is established, and what this record commits to:
 
-The bucket has versioning enabled and a lifecycle rule that retains deleted versions for
-`[backup] version_retention_days`, defaulting to 90.
+**Credential scoping alone cannot provide tamper resistance.** restic requires delete
+permission, and on B2 delete permission means permanent version deletion. No arrangement of
+capabilities on a key the machine holds can prevent the holder of that machine from destroying
+the archive. The property has to be enforced by the storage service against a key that *can*
+delete, or it does not exist.
 
-`pless audit` verifies both — the key's capabilities and bucket restriction, and the bucket's
-lifecycle window — and fails when either is wrong.
+**Nothing may claim otherwise until a mechanism is verified.** `pless audit` must not report a
+setup as tamper-resistant on the strength of versioning and a lifecycle rule, and the
+documentation says plainly that the off-site copy is destroyable by whoever holds the machine.
+
+**The machine's key is still scoped to one bucket**, with no `writeBuckets`, `deleteBuckets`,
+`writeBucketRetentions`, `writeKeys` or `deleteKeys`. This limits the blast radius to one
+bucket and stops the key reconfiguring the bucket. It is worth doing and it is not tamper
+resistance.
+
+**The mechanism is not chosen.** See below; it needs verifying against a real B2 account and a
+real restic run before it is written down as decided.
 
 ## Consequences
 
-An attacker who takes the machine can delete every snapshot, and the versions survive in an
-account they have no access to. restic runs unmodified, and setup is two clicks in B2 plus
-three lines of documentation.
+Until a mechanism is settled, the honest position is that an attacker who takes the machine can
+destroy the off-site copy, and the answer to that is a second copy somewhere the machine has no
+credentials for — `pless backup mirror`, to an external disk or a repository the target cannot
+reach.
 
-The protection is invisible from the machine, and an operator can get the key wrong without
-ever noticing. That is why it is a failing audit check rather than a setup instruction nobody
-rereads: the whole design rests on a fact about the world, so the fact has to be checked
-mechanically.
+The audit work in stage 4 shrinks accordingly: it can check that the key is scoped to one bucket
+and cannot change bucket settings, which is true and useful, but it cannot certify immutability.
 
-Retention no longer has to run from the operator's machine. Versioning means a compromised
-machine that runs `restic forget --prune` still leaves the configured window of recoverable
-versions behind, so `pless backup forget --confirm` runs on the target against the key already
-there. It stays an occasional, deliberate act, never a timer — that part of the original
-reasoning holds even though its cause is gone.
+This record is `Proposed` rather than `Accepted` on purpose. A register full of decisions that
+were never really made is worse than a gap, and the gap is the accurate description of where
+this stands.
 
-Tamper resistance is now a property of the storage provider rather than of `pless`. A local
-directory repository and rclone-mediated targets get no such guarantee, and the documentation
-has to say so plainly rather than presenting the kinds as peers.
+## Alternatives still open
 
-Cost is not a factor. B2 is roughly $6/TB/month with the first 10 GB free, and an archive of a
-few gigabytes with versioning stays under that. Restores are free too, since egress up to three
-times stored volume is included.
-
-## Alternatives considered
-
-- **A key without delete capability:** the original plan, and the reason this record exists. It
-  cannot drive restic at all.
-- **`restic --no-lock`:** would make a no-delete key work, at the price of concurrency
-  protection — with two timers and manual verification hitting the same repository, that is the
-  wrong thing to trade away.
-- **B2 Object Lock:** a stronger immutability guarantee, and a lock cannot be lifted before it
-  expires. A misconfigured retention then binds the operator to paying for data they no longer
-  want. Worth documenting as an option for those who want it; wrong as the default.
-- **A second cloud provider:** doubles the configuration and the failure modes, not the cost,
-  for a scenario `pless backup mirror` already covers.
+- **B2 Object Lock**, most likely in governance mode: locked versions cannot be deleted before
+  their retention expires, and only a key with `bypassGovernance` can override that — which the
+  machine's key would not have. This is the leading candidate. The open question is what it does
+  to restic: the native `b2` backend deletes file versions, which Object Lock would refuse, so
+  lock files could not be cleaned up. Pointing restic at B2's S3-compatible endpoint instead
+  turns a delete into a delete marker, which Object Lock permits, at the cost of retaining data
+  for the lock period. **Both halves need testing against a real account.**
+- **An append-only write path**, such as a restic REST server in `--append-only` mode on a host
+  the target cannot otherwise reach. Genuinely enforces the property, and adds a service to run.
+- **Pull rather than push**: another machine fetches from the target. Removes cloud credentials
+  from the target entirely, and reintroduces the problem ADR 0013 rejected — backups that happen
+  only when something else is awake.
+- **Accepting the exposure** and relying on `mirror` for the second copy. The status quo of this
+  record, and the honest default until one of the above is verified.
