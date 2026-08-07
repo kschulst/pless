@@ -200,7 +200,7 @@ retention_weekly = 8
 retention_monthly = 12
 retention_yearly = 3
 
-version_retention_days = 90       # what the bucket lifecycle rule must keep
+version_retention_days = 90       # reserved; see the warning below
 
 exporter_delete = false           # pass --delete to document_exporter
 ```
@@ -232,10 +232,16 @@ it wakes.
 runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--keep-weekly`,
 `--keep-monthly` and `--keep-yearly`.
 
-**`version_retention_days`** is not something `pless` sets. It is what the bucket's lifecycle
-rule is expected to keep, so that a compromised machine deleting its own snapshots still leaves
-recoverable versions behind. `pless audit` checks the bucket against this number. See
-[ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md).
+!!! danger "The machine can destroy the off-site copy"
+
+    **`version_retention_days`** is reserved, and it does not yet buy you anything. restic needs
+    delete permission for its lock files, and on B2 that capability permits *permanent* deletion
+    of a specific version. Bucket versioning and a lifecycle rule govern automatic cleanup, not
+    explicit deletion — so whoever takes the machine can enumerate and destroy every version.
+
+    Until [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
+    settles on a mechanism that enforces retention against a delete-capable key, keep a second
+    copy somewhere the machine has no credentials for — see `pless backup mirror`.
 
 **`exporter_delete`** is off by default: `pless` does not delete things you did not ask it to
 delete. Turning it on keeps the export directory from growing, at the cost of a partially failed
