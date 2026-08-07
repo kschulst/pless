@@ -14,9 +14,10 @@ works, by restoring it rather than by inspecting it.
 - **Create** the escape hatches that make an encrypted archive usable: extract documents in the
   clear on demand, mirror the repository elsewhere still encrypted, and prune history
   deliberately.
-- **Verify** mechanically, in `pless audit`, that the tamper resistance the design depends on is
-  actually configured: a target key scoped to one bucket that cannot change bucket settings, and
-  a bucket whose versioning and lifecycle rule retain deleted versions.
+- **Verify** mechanically, in `pless audit`, that the target's key is scoped to one bucket and
+  cannot change bucket settings. This limits blast radius; it is explicitly *not* tamper
+  resistance, which no key the machine holds can provide
+  ([ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md)).
 
 **Boundaries.** Restore targets a fresh installation; restoring into an installation that already
 holds documents is out of scope. The operating system is not backed up — it is reproducible from
@@ -205,16 +206,20 @@ plain string, and its "kind" is a derived property, never a stored enum.
      question, with the honest caveat that rclone's OAuth flow on a headless machine is
      materially harder than B2, rather than a code question.
 
-3. **Tamper resistance in the storage layer, not in the credential**
+3. **Tamper resistance is unresolved, and nothing may claim otherwise**
    ([ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md)):
    - restic creates and deletes files in `locks/` during ordinary operation, so a key without
      delete permission cannot be used. The target therefore holds a key with full read/write/
      delete on **one bucket only**, and no capability to change bucket settings.
-   - The bucket has versioning enabled and a lifecycle rule retaining deleted versions for
-     `version_retention_days` (default 90). An attacker who takes the machine can delete, and the
-     versions survive in an account they cannot reach.
-   - Because this protection is invisible from the machine, it is enforced as an `audit` finding
-     that fails a build, not as a setup instruction nobody rereads.
+   - **Unresolved.** Versioning plus a lifecycle rule does *not* provide this: B2's
+     `deleteFiles`, which restic requires for `locks/`, authorises `b2_delete_file_version` —
+     permanent removal of a specific version. Lifecycle rules govern automatic cleanup, not
+     explicit deletion. Object Lock is the leading candidate and needs testing against a real
+     account first. Until then the honest position is that whoever takes the machine can destroy
+     the off-site copy, and `mirror` to a location the machine cannot reach is the answer.
+   - What `audit` can check — that the key is scoped to one bucket and cannot change bucket
+     settings — it checks as a finding that fails a build. What it must not do is report the
+     setup as tamper-resistant on that basis.
 
 4. **Quiescence by draining the queue, with a loud timeout**:
    - Paperless has no pause API. Since import goes through the REST API (ADR 0012), the Celery
@@ -349,8 +354,8 @@ repository kind is a first-class citizen rather than a test fixture.
    - `quiescence_timeout_seconds: int = 900` — how long to wait for the queue to drain.
    - `retention_daily: int = 7`, `retention_weekly: int = 8`, `retention_monthly: int = 12`,
      `retention_yearly: int = 3`.
-   - `version_retention_days: int = 90` — what the bucket lifecycle rule is expected to keep;
-     audited, never applied by `pless`.
+   - `version_retention_days: int = 90` — retained pending a decision on the mechanism. It must
+     not be presented as tamper resistance until one is verified.
    - `exporter_delete: bool = False` — pass `--delete` to `document_exporter`.
 3. Methods:
    - `is_configured() -> bool`: `bool(self.restic_repository)`.
@@ -489,7 +494,8 @@ repository kind is a first-class citizen rather than a test fixture.
    - `restic copy --repo2` (or `--from-repo`, matching the installed restic version) so the copy
      stays encrypted end to end. Never decrypts.
 4. `forget(cfg, target, dry_run: bool = True) -> str` — runs on the target against the key
-   already there, because versioning rather than the credential is what protects history
+   already there. Nothing about where retention runs changes the exposure, since the machine's
+   key can delete versions regardless
    ([ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md)):
    - `RetentionPolicy.forget_args()` → `--keep-daily 7 --keep-weekly 8 --keep-monthly 12
      --keep-yearly 3 --tag pless`.
@@ -508,11 +514,12 @@ repository kind is a first-class citizen rather than a test fixture.
 3. `check_backup_credential(capability: CredentialCapability) -> Finding`:
    - CRITICAL when the key is not restricted to a single bucket, or holds any of
      `writeBuckets`, `deleteBuckets`, `writeBucketRetentions`, `writeKeys`, `deleteKeys` — those
-     let a compromised machine remove the versioning that protects its own history.
+     let a compromised machine reconfigure the bucket itself. Scope limits blast radius; it does
+     not make data undeletable, and the finding's wording must not imply that it does.
    - OK otherwise, stating the bucket name and that the key cannot change bucket settings.
-4. `check_bucket_protection(protection: BucketProtection, required_days: int) -> Finding`:
-   - CRITICAL when versioning does not keep prior versions, or when
-     `days_from_hiding_to_deleting < required_days`.
+4. `check_bucket_protection(...)` — **deferred until ADR 0017 settles on a mechanism.** A check
+   that passes on versioning plus a lifecycle rule would certify a setup that a compromised
+   machine can still destroy, and a green check is worse than no check.
 5. `check_backup_locality(repository: str) -> Finding`:
    - WARNING for a local repository, saying in one sentence that it protects against deletion and
      corruption but not against loss of the machine.
@@ -590,15 +597,16 @@ repository kind is a first-class citizen rather than a test fixture.
 3. `pless.toml` and `src/pless/templates/pless.toml` — the new `[backup]` keys with their
    defaults and short comments.
 4. `src/pless/templates/env.example` — remove "(not built yet)" from the restic block.
-5. `docs/cookbook/` — a new `backup.md` covering: creating the B2 bucket with versioning and a
-   lifecycle rule, creating the single-bucket key, `pless backup init`, reading `backup status`,
+5. `docs/cookbook/` — a new `backup.md` covering: creating the B2 bucket, creating the
+   single-bucket key, what that key can and cannot protect against, `pless backup init`,
+   `pless backup mirror` as the answer to a destroyed off-site copy, reading `backup status`,
    running a drill, and what to do when `RESTIC_PASSWORD` is lost (nothing — that is the point).
    Add it to the nav in `zensical.toml`, or the nav test fails.
 6. `docs/index.md` and `docs/maintenance.md` — anywhere a status table says backup does not
    exist, update it; the honesty rule cuts both ways.
 7. `adr/` — written before the code, and already in place:
-   [0017](../../adr/0017-tamper-resistance-in-the-bucket.md) (tamper resistance lives in the
-   bucket, not in the credential),
+   [0017](../../adr/0017-tamper-resistance-in-the-bucket.md) (**Proposed** — a credential the
+   machine holds cannot protect the archive from the machine; the mechanism is still open),
    [0018](../../adr/0018-no-plaintext-copy-on-the-operators-machine.md) (a plaintext local copy is
    not a backup layer, which is what folds `download` into `extract`), and
    [0019](../../adr/0019-the-verification-record-lives-on-the-target.md) (the verification record
@@ -614,7 +622,7 @@ repository kind is a first-class citizen rather than a test fixture.
 2. `tests/test_backup_units.py` — the rendered unit contains `SuccessExitStatus=75`,
    `RequiresMountsFor=/opt/paperless`, the configured `OnCalendar`, and no secret.
 3. `tests/test_audit.py` — the new findings, including a full-access key, a multi-bucket key, a
-   bucket without versioning, a lifecycle window shorter than configured, and a local repository.
+   and a local repository.
 4. `tests/test_preflight.py` — verified, unverified, stale-record and missing-record cases.
 5. `tests/test_export_layout.py` — assert against a recorded exporter manifest that originals and
    metadata are separable, so AC 5 is tested rather than trusted.
@@ -686,8 +694,8 @@ repository kind is a first-class citizen rather than a test fixture.
    - The target's B2 key is restricted to one bucket and must not hold `writeBuckets`,
      `deleteBuckets`, `writeBucketRetentions`, `writeKeys` or `deleteKeys`. `pless audit` fails
      when it does.
-   - The bucket must keep prior versions with `daysFromHidingToDeleting >=
-     version_retention_days`. `pless audit` fails when it does not.
+   - No claim of immutability may be made, in `audit` output or in documentation, until a
+     mechanism that actually enforces retention against a delete-capable key is verified.
    - The privileged pruning key never reaches the target.
    - `RESTIC_PASSWORD` has no recovery path. `backup init` says so as loudly as `storage init`
      does for the LUKS passphrase, and the docs repeat it without softening.
