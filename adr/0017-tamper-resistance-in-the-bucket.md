@@ -2,7 +2,7 @@
 
 - **Status:** Proposed — the constraint is established; the mechanism is not chosen
 - **Date:** 2026-08-06
-- **Context references:** issue #2; amends [0013](0013-backup-offsite-and-drilled.md)
+- **Context references:** issues #2 and #14; amends [0013](0013-backup-offsite-and-drilled.md)
 
 ## Context
 
@@ -50,7 +50,8 @@ bucket and stops the key reconfiguring the bucket. It is worth doing and it is n
 resistance.
 
 **The mechanism is not chosen.** See below; it needs verifying against a real B2 account and a
-real restic run before it is written down as decided.
+real restic run before it is written down as decided. That work is tracked in
+[issue #14](https://github.com/kschulst/pless/issues/14), which this record is waiting on.
 
 ## Consequences
 

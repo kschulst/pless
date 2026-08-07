@@ -159,8 +159,10 @@ with the old password.
 **Can it be changed?** Yes, while you still know it — `restic key add` and `restic key remove`
 change the password without rewriting the data.
 
-**Prove you have it** with `pless backup verify`, which restores from the repository rather
-than checking that a file exists.
+**Prove you have it** — not yet possible. `pless backup verify`, which restores from the
+repository rather than checking that a file exists, is
+[not built yet](https://github.com/kschulst/pless/issues/3). Until it is, a backup you have
+never restored from is a belief, and `pless preflight` says so.
 
 ## `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY`
 
