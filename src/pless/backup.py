@@ -270,11 +270,14 @@ def render_backup_env(cfg: config.Config, secrets: config.Secrets) -> str:
         missing.append("[backup] restic_repository in pless.toml")
     if not secrets.restic_password:
         missing.append("RESTIC_PASSWORD in .env")
-    if cfg.backup.repository_kind == "b2":
+    # Both kinds need the same pair of object-storage credentials; only the
+    # variable names restic reads differ. A B2 application key doubles as an
+    # S3 credential, which is what makes the S3 endpoint usable at all.
+    if cfg.backup.repository_kind in ("b2", "s3"):
         if not secrets.b2_account_id:
-            missing.append("B2_ACCOUNT_ID in .env")
+            missing.append("B2_ACCOUNT_ID in .env (the keyID)")
         if not secrets.b2_account_key:
-            missing.append("B2_ACCOUNT_KEY in .env")
+            missing.append("B2_ACCOUNT_KEY in .env (the applicationKey)")
     if missing:
         raise BackupError(
             "Backup is not configured yet. Missing: "
@@ -288,12 +291,18 @@ def render_backup_env(cfg: config.Config, secrets: config.Secrets) -> str:
         f"RESTIC_REPOSITORY={_shell_quote(cfg.backup.restic_repository)}",
         f"RESTIC_PASSWORD={_shell_quote(secrets.restic_password)}",
     ]
+    # restic reads different variable names per backend, from the same credential.
     if cfg.backup.repository_kind == "b2":
         lines.append(f"B2_ACCOUNT_ID={_shell_quote(secrets.b2_account_id)}")
         lines.append(f"B2_ACCOUNT_KEY={_shell_quote(secrets.b2_account_key)}")
+    elif cfg.backup.repository_kind == "s3":
+        lines.append(f"AWS_ACCESS_KEY_ID={_shell_quote(secrets.b2_account_id)}")
+        lines.append(f"AWS_SECRET_ACCESS_KEY={_shell_quote(secrets.b2_account_key)}")
     lines.append("export RESTIC_REPOSITORY RESTIC_PASSWORD")
     if cfg.backup.repository_kind == "b2":
         lines.append("export B2_ACCOUNT_ID B2_ACCOUNT_KEY")
+    elif cfg.backup.repository_kind == "s3":
+        lines.append("export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY")
     return "\n".join(lines) + "\n"
 
 
@@ -548,13 +557,18 @@ SAMPLED=$(echo "$SAMPLE" | grep -c . || true)
 
 DETAIL="the sample could not be restored"
 if [ "$SAMPLED" -gt 0 ]; then
-  INCLUDES=""
-  for path in $(echo "$SAMPLE" | tr ' ' '\\001'); do
-    real=$(echo "$path" | tr '\\001' ' ')
-    INCLUDES="$INCLUDES --include=$real"
-  done
-  # shellcheck disable=SC2086
-  restic restore "$SNAPSHOT_ID" --target "$SCRATCH" $INCLUDES > /dev/null
+  # Paperless filenames contain spaces — "2026-08-08 Some Title.pdf" is the
+  # normal case, not an edge case. Building these into a string and expanding
+  # it unquoted splits every filename in half, and restic reads the fragments
+  # as extra snapshot IDs. Positional parameters carry the spaces intact.
+  set --
+  while IFS= read -r sample_path; do
+    [ -n "$sample_path" ] || continue
+    set -- "$@" --include "$sample_path"
+  done <<SAMPLE_EOF
+$SAMPLE
+SAMPLE_EOF
+  restic restore "$SNAPSHOT_ID" --target "$SCRATCH" "$@" > /dev/null
   RESTORED=$(find "$SCRATCH" -type f | wc -l | tr -d ' ')
 else
   RESTORED=0
