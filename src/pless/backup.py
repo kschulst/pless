@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import shlex
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pless import composegen, config, sshexec, storage
@@ -30,6 +31,7 @@ STAGING_DIR = f"{composegen.INSTALL_DIR}/backups"
 EXPORT_DIR = f"{composegen.INSTALL_DIR}/export"
 ENV_FILE = f"{composegen.INSTALL_DIR}/backup.env"
 RUN_RECORD = f"{STAGING_DIR}/last-run.json"
+VERIFY_RECORD = f"{STAGING_DIR}/verification.json"
 
 # The script lives on the root filesystem, not on the encrypted volume. It has
 # to be able to run *while the volume is locked* in order to report a calm skip;
@@ -39,9 +41,12 @@ RUN_RECORD = f"{STAGING_DIR}/last-run.json"
 # only sources it after confirming the volume is mounted.
 SCRIPT_DIR = "/usr/local/lib/pless"
 SCRIPT_PATH = f"{SCRIPT_DIR}/pless-backup.sh"
+VERIFY_SCRIPT_PATH = f"{SCRIPT_DIR}/pless-backup-verify.sh"
 
 SERVICE_UNIT = "/etc/systemd/system/pless-backup.service"
 TIMER_UNIT = "/etc/systemd/system/pless-backup.timer"
+VERIFY_SERVICE_UNIT = "/etc/systemd/system/pless-backup-verify.service"
+VERIFY_TIMER_UNIT = "/etc/systemd/system/pless-backup-verify.timer"
 
 SNAPSHOT_TAG = "pless"
 
@@ -114,6 +119,85 @@ class BackupRun:
             snapshot_id=str(data.get("snapshot_id", "")),
             documents_exported=int(data.get("documents_exported", 0) or 0),
             queue_moved_during_run=bool(data.get("queue_moved_during_run", False)),
+            detail=str(data.get("detail", "")),
+        )
+
+
+class VerificationLevel(StrEnum):
+    # The same restore path at two depths. Content is cheap enough to run on a
+    # timer; the full rehearsal is the only one that also tests the procedure.
+    CONTENT = "content"
+    FULL = "full"
+
+
+@dataclass
+class VerificationRecord:
+    """Evidence that a restore actually produced the documents.
+
+    Lives on the target beside the data it describes, and names a snapshot, so
+    the claim can be checked against the repository rather than taken on trust
+    (ADR 0019). `preflight` reads it across process boundaries, which is why it
+    is persisted at all.
+    """
+
+    level: VerificationLevel = VerificationLevel.CONTENT
+    performed_at: str = ""
+    snapshot_id: str = ""
+    repository_kind: str = ""
+    passed: bool = False
+    documents_expected: int = 0
+    documents_found: int = 0
+    sample_size: int = 0
+    mismatches: list[str] = field(default_factory=list)
+    detail: str = ""
+
+    def age_days(self, now: datetime) -> float | None:
+        """How old the record is, or None if it carries no usable timestamp."""
+        if not self.performed_at:
+            return None
+        try:
+            performed = datetime.fromisoformat(self.performed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if performed.tzinfo is None:
+            performed = performed.replace(tzinfo=UTC)
+        return (now - performed).total_seconds() / 86400
+
+    def is_stale(self, max_age_days: int, now: datetime) -> bool:
+        """A restore proved eleven months ago proves little about today.
+
+        An unreadable or missing timestamp counts as stale: the point of the
+        record is to answer "recently?", and a record that cannot say when is
+        not evidence.
+        """
+        age = self.age_days(now)
+        if age is None:
+            return True
+        return age > max_age_days
+
+    @classmethod
+    def from_json(cls, text: str) -> VerificationRecord:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise BackupError(
+                f"{VERIFY_RECORD} on the target is not valid JSON: {exc}. "
+                "Run `pless backup verify` to write a fresh one."
+            ) from exc
+        try:
+            level = VerificationLevel(data.get("level", VerificationLevel.CONTENT))
+        except ValueError:
+            level = VerificationLevel.CONTENT
+        return cls(
+            level=level,
+            performed_at=str(data.get("performed_at", "")),
+            snapshot_id=str(data.get("snapshot_id", "")),
+            repository_kind=str(data.get("repository_kind", "")),
+            passed=bool(data.get("passed", False)),
+            documents_expected=int(data.get("documents_expected", 0) or 0),
+            documents_found=int(data.get("documents_found", 0) or 0),
+            sample_size=int(data.get("sample_size", 0) or 0),
+            mismatches=[str(m) for m in (data.get("mismatches") or [])],
             detail=str(data.get("detail", "")),
         )
 
@@ -360,6 +444,142 @@ log "done: $DOCUMENTS documents, snapshot $SNAPSHOT_ID"
 """
 
 
+def render_verify_script(cfg: config.Config) -> str:
+    """Content verification: restore a sample and prove the documents come back.
+
+    Deliberately not a hash comparison against Paperless's own manifest. restic
+    verifies content hashes as it restores, so a restore that succeeds *is* the
+    content proof, and `restic ls` gives the document count without moving any
+    data at all. Cost therefore scales with the sample rather than the archive,
+    and nothing here depends on Paperless's manifest internals.
+
+    The count is compared against what the run recorded, not against the live
+    archive: the natural time to verify is right after a backup, when the source
+    has legitimately moved on. Drift against the live count is information, not
+    failure.
+    """
+    return f"""\
+#!/bin/sh
+# Rendered by pless. Do not edit here — `pless backup init` overwrites it.
+set -eu
+
+INSTALL_DIR={composegen.INSTALL_DIR}
+STAGING={STAGING_DIR}
+RECORD={VERIFY_RECORD}
+RUN_RECORD={RUN_RECORD}
+EXIT_SKIPPED={EXIT_SKIPPED}
+SAMPLE_SIZE={cfg.backup.verify_sample_size}
+REPOSITORY_KIND={cfg.backup.repository_kind}
+
+PERFORMED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+SNAPSHOT_ID=""
+EXPECTED=0
+FOUND=0
+SAMPLED=0
+PASSED=false
+DETAIL=""
+
+log() {{ echo "pless-backup-verify: $*" >&2; }}
+
+write_record() {{
+  mkdir -p "$STAGING"
+  cat > "$RECORD" <<RECORD_EOF
+{{
+  "level": "content",
+  "performed_at": "$PERFORMED_AT",
+  "snapshot_id": "$SNAPSHOT_ID",
+  "repository_kind": "$REPOSITORY_KIND",
+  "passed": $PASSED,
+  "documents_expected": $EXPECTED,
+  "documents_found": $FOUND,
+  "sample_size": $SAMPLED,
+  "mismatches": [],
+  "detail": "$1"
+}}
+RECORD_EOF
+  chmod 0600 "$RECORD"
+}}
+
+on_exit() {{
+  code=$?
+  if [ "$code" -ne 0 ] && [ "$code" -ne "$EXIT_SKIPPED" ]; then
+    write_record "Verification failed: $DETAIL"
+  fi
+}}
+trap on_exit EXIT
+
+if ! mountpoint -q "$INSTALL_DIR"; then
+  log "the encrypted volume is not mounted — cannot verify. Run \\`pless unlock\\`."
+  exit "$EXIT_SKIPPED"
+fi
+
+. {ENV_FILE}
+SCRATCH=$(mktemp -d "$STAGING/verify-XXXXXX")
+cleanup_scratch() {{ rm -rf "$SCRATCH"; }}
+trap 'cleanup_scratch; on_exit' EXIT
+
+DETAIL="could not read the snapshot list"
+SNAPSHOT_ID=$(restic snapshots --tag {SNAPSHOT_TAG} --json 2>/dev/null \\
+  | tr ',' '\\n' | grep -o '"id":"[^"]*"' | tail -1 | cut -d'"' -f4 || true)
+
+# An empty repository is a failure, not "nothing yet". A repository that was
+# silently recreated looks exactly like success and contains nothing.
+if [ -z "$SNAPSHOT_ID" ]; then
+  DETAIL="No snapshots tagged {SNAPSHOT_TAG} in the repository. Either nothing has been \
+backed up yet, or the repository was recreated — the second looks like success and holds nothing."
+  log "$DETAIL"
+  write_record "$DETAIL"
+  exit 1
+fi
+
+# Counting from the snapshot listing costs nothing: no data is moved.
+DETAIL="could not list the snapshot contents"
+LISTING=$(restic ls "$SNAPSHOT_ID")
+FOUND=$(echo "$LISTING" | grep -c -- '-manifest\\.json$' || true)
+EXPECTED=$(grep -o '"documents_exported"[^0-9]*[0-9]*' "$RUN_RECORD" 2>/dev/null \\
+  | grep -o '[0-9]*$' || echo 0)
+[ -n "$EXPECTED" ] || EXPECTED=0
+
+# Restore a sample rather than the archive. restic verifies content hashes as
+# it restores, so a sample that comes back is a sample proven intact.
+SAMPLE=$(echo "$LISTING" | grep "$INSTALL_DIR/export/" | grep -v -- '-manifest\\.json$' \\
+  | grep -v -- '-thumbnail\\.webp$' | shuf -n "$SAMPLE_SIZE" || true)
+SAMPLED=$(echo "$SAMPLE" | grep -c . || true)
+
+DETAIL="the sample could not be restored"
+if [ "$SAMPLED" -gt 0 ]; then
+  INCLUDES=""
+  for path in $(echo "$SAMPLE" | tr ' ' '\\001'); do
+    real=$(echo "$path" | tr '\\001' ' ')
+    INCLUDES="$INCLUDES --include=$real"
+  done
+  # shellcheck disable=SC2086
+  restic restore "$SNAPSHOT_ID" --target "$SCRATCH" $INCLUDES > /dev/null
+  RESTORED=$(find "$SCRATCH" -type f | wc -l | tr -d ' ')
+else
+  RESTORED=0
+fi
+
+if [ "$FOUND" -eq 0 ]; then
+  DETAIL="The snapshot contains no documents at all."
+elif [ "$EXPECTED" -gt 0 ] && [ "$FOUND" -ne "$EXPECTED" ]; then
+  DETAIL="The snapshot holds $FOUND documents; the run that produced it recorded $EXPECTED."
+elif [ "$SAMPLED" -gt 0 ] && [ "$RESTORED" -lt "$SAMPLED" ]; then
+  DETAIL="Restored only $RESTORED of $SAMPLED sampled files."
+else
+  PASSED=true
+  DETAIL="Restored $RESTORED of $SAMPLED sampled files from snapshot $SNAPSHOT_ID; \
+$FOUND documents present, matching the run that produced it."
+fi
+
+write_record "$DETAIL"
+cleanup_scratch
+trap - EXIT
+log "$DETAIL"
+[ "$PASSED" = true ] || exit 1
+"""
+
+
 def render_units(cfg: config.Config) -> dict[str, str]:
     """Unit and timer, keyed by their absolute path on the target."""
     # Deliberately no RequiresMountsFor: it would turn "the volume is locked"
@@ -391,7 +611,35 @@ RandomizedDelaySec=900
 [Install]
 WantedBy=timers.target
 """
-    return {SERVICE_UNIT: service, TIMER_UNIT: timer}
+    verify_service = f"""\
+[Unit]
+Description=pless backup verification (restore a sample and prove it comes back)
+After=paperless.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh {VERIFY_SCRIPT_PATH}
+# A locked volume is a skip, not a failure.
+SuccessExitStatus={EXIT_SKIPPED}
+"""
+    verify_timer = f"""\
+[Unit]
+Description=pless backup verification schedule
+
+[Timer]
+OnCalendar={cfg.backup.verify_schedule}
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target
+"""
+    return {
+        SERVICE_UNIT: service,
+        TIMER_UNIT: timer,
+        VERIFY_SERVICE_UNIT: verify_service,
+        VERIFY_TIMER_UNIT: verify_timer,
+    }
 
 
 # --- Parsing --------------------------------------------------------------
@@ -496,10 +744,12 @@ def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
     _run_ok(target, f"sudo mkdir -p {STAGING_DIR} {EXPORT_DIR} {SCRIPT_DIR}")
     _write_remote_file(target, ENV_FILE, environment, mode="0600")
     _write_remote_file(target, SCRIPT_PATH, render_script(cfg), mode="0700")
+    _write_remote_file(target, VERIFY_SCRIPT_PATH, render_verify_script(cfg), mode="0700")
     for path, content in render_units(cfg).items():
         _write_remote_file(target, path, content)
     _run_ok(target, "sudo systemctl daemon-reload")
     _run_ok(target, "sudo systemctl enable --now pless-backup.timer")
+    _run_ok(target, "sudo systemctl enable --now pless-backup-verify.timer")
 
 
 def initialise_repository(target: Host) -> bool:
@@ -552,6 +802,51 @@ def export_only(cfg: config.Config, target: Host) -> str:
         f"--split-manifest{delete_flag}",
         timeout=7200,
     )
+
+
+def verify(target: Host, timeout: int = 3600) -> VerificationRecord:
+    """Verify a restore now, by invoking the script the timer invokes.
+
+    A failing verification is a *result*, not an exception: the record it wrote
+    is the answer, and `preflight` has to be able to read it either way.
+    """
+    result = _run(target, f"sudo sh {VERIFY_SCRIPT_PATH}", timeout=timeout)
+    if result.exit_code == EXIT_SKIPPED:
+        raise BackupError(
+            "The encrypted volume is not mounted, so there is nothing to verify. "
+            "Run `pless unlock` and try again."
+        )
+    record = read_verification_record(target)
+    if record is None:
+        raise BackupError(
+            "Verification left no record behind. Check "
+            "`journalctl -u pless-backup-verify.service` on the target. "
+            f"{result.stderr.strip()}"
+        )
+    return record
+
+
+def read_verification_record(target: Host) -> VerificationRecord | None:
+    result = _run(target, f"sudo cat {VERIFY_RECORD} 2>/dev/null")
+    if not result.ok or not result.stdout.strip():
+        return None
+    return VerificationRecord.from_json(result.stdout)
+
+
+def is_verified(cfg: config.Config, target: Host, now: datetime | None = None) -> bool:
+    """Has a restore succeeded recently enough to still mean something?
+
+    Silence reads as "no". A missing record, an unreadable one, a failed one and
+    a stale one are all the same answer to `preflight`, which is the only honest
+    default when the question is whether the documents can be got back.
+    """
+    try:
+        record = read_verification_record(target)
+    except BackupError:
+        return False
+    if record is None or not record.passed:
+        return False
+    return not record.is_stale(cfg.backup.verify_max_age_days, now or datetime.now(UTC))
 
 
 def read_run_record(target: Host) -> BackupRun | None:

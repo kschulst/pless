@@ -76,17 +76,18 @@ def check_recoverability(backup_configured: bool, backup_verified: bool) -> list
             detail=(
                 "Configured."
                 if backup_configured
-                else "Not configured. Backup is not implemented yet, so this machine holds "
-                "the only copy of whatever you import. Keep your originals."
+                else "Not configured, so this machine holds the only copy of whatever you "
+                "import. Set [backup] restic_repository and run `pless backup init`."
             ),
         ),
         Check(
             name="restore verified",
             passed=backup_verified,
             detail=(
-                "A restore has been performed and inspected."
+                "A restore has been performed and the documents came back."
                 if backup_verified
-                else "Never performed. A backup that has not been restored is a belief."
+                else "Not recently. A backup that has not been restored is a belief — run "
+                "`pless backup verify`. A verification that has expired counts as none."
             ),
         ),
     ]

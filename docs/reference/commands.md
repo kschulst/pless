@@ -168,6 +168,25 @@ target. No snapshot, no database dump.
 Useful for inspecting what an export contains. It is not a backup: the export sits on the same
 machine as the archive.
 
+### `pless backup verify [--level content]`
+
+Proves the documents come back, by restoring them rather than by checking that an archive file
+exists.
+
+Restores a random sample from the newest snapshot to a scratch directory, counts the documents
+in the snapshot, and compares that count against what the run which produced it recorded — not
+against the live archive, which will legitimately have moved on since. restic verifies content
+hashes as it restores, so a sample that comes back is a sample proven intact.
+
+Cost scales with `[backup] verify_sample_size`, not with the size of the archive, which is what
+makes it cheap enough to run on a timer. It runs weekly by default; see `verify_schedule`.
+
+The result is written to the target and is what `pless preflight` reads. An empty repository
+fails: one that was silently recreated looks exactly like success and contains nothing.
+
+`--level full`, the whole rehearsal into a throwaway VM, is
+[not built yet](https://github.com/kschulst/pless/issues/3).
+
 ### `pless backup status [--json]`
 
 Repository kind, timer state, snapshot count, the newest snapshot, and how the last run ended.
