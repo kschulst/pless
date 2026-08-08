@@ -232,8 +232,8 @@ class Secrets(BaseSettings):
     paperless_secret_key: str = ""
     postgres_password: str = ""
     restic_password: str = ""
-    b2_account_id: str = ""
-    b2_account_key: str = ""
+    b2_key_id: str = ""
+    b2_application_key: str = ""
     ts_authkey: str = ""
 
 

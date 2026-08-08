@@ -83,7 +83,7 @@ it can be piped into a vault CLI without a header getting in the way.
 |---|---|---|---|
 | LUKS passphrase | Every document, at rest | You, at `pless storage init` | **The documents are gone.** No recovery |
 | `RESTIC_PASSWORD` | Every off-site snapshot | You, before `pless backup init` | **The backup is unreadable.** No recovery |
-| `B2_ACCOUNT_ID` / `B2_ACCOUNT_KEY` | Write access to the backup bucket | Backblaze B2 console | Reissue — carefully, see below |
+| `B2_KEY_ID` / `B2_APPLICATION_KEY` | Write access to the backup bucket | Backblaze B2 console | Reissue — carefully, see below |
 | `POSTGRES_PASSWORD` | The database, on the encrypted volume | `pless init --secrets` | Reset on the target |
 | `PAPERLESS_SECRET_KEY` | Session and token signing | `pless init --secrets` | Reset; everyone signs in again |
 | `PAPERLESS_ADMIN_PASSWORD` | The Paperless admin account | `pless init --secrets` | Reset on the target |
@@ -106,7 +106,7 @@ wrong by day three. In flow order:
    leave the only copy.
 4. **LUKS passphrase** — at `pless storage init`. Put it in the vault *before* you type it.
 5. `PAPERLESS_API_TOKEN` — after `pless deploy paperless`, from the Paperless web interface.
-6. `RESTIC_PASSWORD`, `B2_ACCOUNT_ID`, `B2_ACCOUNT_KEY` — before `pless backup init`.
+6. `RESTIC_PASSWORD`, `B2_KEY_ID`, `B2_APPLICATION_KEY` — before `pless backup init`.
 
 ---
 
@@ -164,7 +164,7 @@ repository rather than checking that a file exists, is
 [not built yet](https://github.com/kschulst/pless/issues/3). Until it is, a backup you have
 never restored from is a belief, and `pless preflight` says so.
 
-## `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY`
+## `B2_KEY_ID` and `B2_APPLICATION_KEY`
 
 **What they protect.** Write access to the bucket holding your snapshots. Not the contents —
 those are already encrypted before they leave the machine.

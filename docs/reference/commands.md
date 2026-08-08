@@ -138,7 +138,7 @@ Writes the backup script, its environment file, the systemd unit and the timer t
 initialises the restic repository if it is new, and enables the timer.
 
 Requires `[backup] restic_repository` in `pless.toml` and `RESTIC_PASSWORD` in `.env` — plus
-`B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` for a `b2:` repository. It names everything that is missing
+`B2_KEY_ID` and `B2_APPLICATION_KEY` for a `b2:` repository. It names everything that is missing
 at once rather than one thing at a time.
 
 The environment file lands on the encrypted volume, mode 0600, owned by root, so it is

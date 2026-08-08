@@ -247,7 +247,7 @@ runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--
 delete. Turning it on keeps the export directory from growing, at the cost of a partially failed
 run having already removed files.
 
-The secrets this section needs — `RESTIC_PASSWORD`, `B2_ACCOUNT_ID` and `B2_ACCOUNT_KEY` — are
+The secrets this section needs — `RESTIC_PASSWORD`, `B2_KEY_ID` and `B2_APPLICATION_KEY` — are
 documented in [Secrets](secrets.md).
 
 ## Optional: getting a machine
@@ -303,8 +303,8 @@ PAPERLESS_API_TOKEN=
 
 # Reserved for off-site backup (not built yet)
 RESTIC_PASSWORD=
-B2_ACCOUNT_ID=
-B2_ACCOUNT_KEY=
+B2_KEY_ID=
+B2_APPLICATION_KEY=
 ```
 
 Any of these can also come from the environment, which is how a CI system or a future web
