@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -167,6 +168,13 @@ class TestTheRenderedShellIsValid:
         result = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
 
+    @pytest.mark.parametrize("sample_size", [1, 20])
+    def test_the_verify_script_parses(self, tmp_path: Path, sample_size: int) -> None:
+        script = tmp_path / "pless-backup-verify.sh"
+        script.write_text(backup.render_verify_script(a_config(verify_sample_size=sample_size)))
+        result = subprocess.run(["sh", "-n", str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+
     def test_the_environment_file_sources_cleanly(self, tmp_path: Path) -> None:
         env_file = tmp_path / "backup.env"
         cfg = a_config(restic_repository="b2:bucket:paperless")
@@ -191,9 +199,22 @@ class TestTheRenderedShellIsValid:
 
 
 class TestRenderUnits:
-    def test_renders_a_service_and_a_timer(self) -> None:
+    def test_renders_a_service_and_a_timer_for_backup_and_for_verification(self) -> None:
         units = backup.render_units(a_config())
-        assert set(units) == {backup.SERVICE_UNIT, backup.TIMER_UNIT}
+        assert set(units) == {
+            backup.SERVICE_UNIT,
+            backup.TIMER_UNIT,
+            backup.VERIFY_SERVICE_UNIT,
+            backup.VERIFY_TIMER_UNIT,
+        }
+
+    def test_verification_runs_on_its_own_schedule(self) -> None:
+        units = backup.render_units(a_config(verify_schedule="Sun *-*-* 05:00:00"))
+        assert "OnCalendar=Sun *-*-* 05:00:00" in units[backup.VERIFY_TIMER_UNIT]
+
+    def test_a_locked_volume_skips_verification_too(self) -> None:
+        units = backup.render_units(a_config())
+        assert f"SuccessExitStatus={backup.EXIT_SKIPPED}" in units[backup.VERIFY_SERVICE_UNIT]
 
     def test_a_skip_counts_as_success(self) -> None:
         units = backup.render_units(a_config())
@@ -347,3 +368,107 @@ class TestRetentionPolicy:
     def test_only_touches_snapshots_we_wrote(self) -> None:
         args = backup.RetentionPolicy.from_config(a_config()).forget_args()
         assert args[args.index("--tag") + 1] == backup.SNAPSHOT_TAG
+
+
+class TestVerificationRecord:
+    def test_reads_a_passing_record(self) -> None:
+        record = backup.VerificationRecord.from_json(
+            json.dumps(
+                {
+                    "level": "content",
+                    "performed_at": "2026-08-06T02:14:07Z",
+                    "snapshot_id": "9f2c1ab4",
+                    "repository_kind": "b2",
+                    "passed": True,
+                    "documents_expected": 4182,
+                    "documents_found": 4182,
+                    "sample_size": 20,
+                    "mismatches": [],
+                    "detail": "all matched",
+                }
+            )
+        )
+        assert record.passed
+        assert record.level is backup.VerificationLevel.CONTENT
+        assert record.documents_found == 4182
+
+    def test_malformed_json_raises_rather_than_reading_as_absent(self) -> None:
+        with pytest.raises(backup.BackupError, match="not valid JSON"):
+            backup.VerificationRecord.from_json("{oh dear")
+
+    def test_an_unknown_level_falls_back_to_content(self) -> None:
+        record = backup.VerificationRecord.from_json('{"level": "vibes"}')
+        assert record.level is backup.VerificationLevel.CONTENT
+
+    def test_a_missing_passed_field_is_not_a_pass(self) -> None:
+        assert not backup.VerificationRecord.from_json("{}").passed
+
+
+class TestStaleness:
+    NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+
+    def record(self, performed_at: str) -> backup.VerificationRecord:
+        return backup.VerificationRecord(performed_at=performed_at, passed=True)
+
+    def test_a_recent_record_is_fresh(self) -> None:
+        assert not self.record("2026-08-19T12:00:00Z").is_stale(14, self.NOW)
+
+    def test_an_old_record_is_stale(self) -> None:
+        # A restore proved months ago proves little about a repository that has
+        # been written to every day since.
+        assert self.record("2026-06-01T12:00:00Z").is_stale(14, self.NOW)
+
+    def test_the_boundary_is_the_configured_window(self) -> None:
+        assert not self.record("2026-08-06T12:00:00Z").is_stale(14, self.NOW)
+        assert self.record("2026-08-06T11:00:00Z").is_stale(14, self.NOW)
+
+    def test_a_missing_timestamp_counts_as_stale(self) -> None:
+        # The point of the record is to answer "recently?". One that cannot say
+        # when is not evidence.
+        assert self.record("").is_stale(14, self.NOW)
+
+    def test_an_unreadable_timestamp_counts_as_stale(self) -> None:
+        assert self.record("last Tuesday").is_stale(14, self.NOW)
+
+    def test_a_naive_timestamp_is_read_as_utc(self) -> None:
+        assert not self.record("2026-08-19T12:00:00").is_stale(14, self.NOW)
+
+
+class TestRenderVerifyScript:
+    def test_is_a_pure_function_of_configuration(self) -> None:
+        cfg = a_config(restic_repository="/mnt/backup")
+        assert backup.render_verify_script(cfg) == backup.render_verify_script(cfg)
+
+    def test_carries_no_secret(self) -> None:
+        script = backup.render_verify_script(a_config(restic_repository="b2:bucket:paperless"))
+        assert "RESTIC_PASSWORD=" not in script
+        assert backup.ENV_FILE in script
+
+    def test_honours_the_configured_sample_size(self) -> None:
+        assert "SAMPLE_SIZE=7" in backup.render_verify_script(a_config(verify_sample_size=7))
+
+    def test_a_locked_volume_is_a_skip(self) -> None:
+        script = backup.render_verify_script(a_config())
+        assert "mountpoint -q" in script
+        assert 'exit "$EXIT_SKIPPED"' in script
+
+    def test_an_empty_repository_fails_rather_than_passing_quietly(self) -> None:
+        # A repository that was silently recreated looks exactly like success.
+        script = backup.render_verify_script(a_config())
+        assert "recreated" in script
+
+    def test_counts_against_the_run_record_not_the_live_archive(self) -> None:
+        # The natural time to verify is right after a backup, when the source
+        # has legitimately moved on.
+        script = backup.render_verify_script(a_config())
+        assert "documents_exported" in script
+        assert backup.RUN_RECORD in script
+
+    def test_removes_its_scratch_directory(self) -> None:
+        script = backup.render_verify_script(a_config())
+        assert 'rm -rf "$SCRATCH"' in script
+
+    def test_restores_a_sample_rather_than_the_archive(self) -> None:
+        script = backup.render_verify_script(a_config())
+        assert "shuf -n" in script
+        assert "--include=" in script

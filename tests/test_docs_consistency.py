@@ -103,6 +103,24 @@ class TestConfigDocs:
         # The example config must actually load, or the docs teach a broken file.
         config.load_config(REPO_ROOT / "pless.toml")
 
+    def test_shipped_config_names_nobody_in_particular(self) -> None:
+        """`pless vm create` rewrites [host], and `git add -A` will commit that.
+
+        It happened: a throwaway drill VM's absolute path, under one developer's
+        home directory, reached main and pointed the checked-in config at a
+        machine that no longer existed. The convention says examples use
+        placeholders rather than anyone's real values, and a convention that
+        relies on remembering is one that decays.
+        """
+        text = (REPO_ROOT / "pless.toml").read_text()
+        assert "/Users/" not in text and "/home/" not in text, (
+            "pless.toml contains an absolute path into someone's home directory. "
+            "Use ~ or a placeholder."
+        )
+        assert "drill" not in text, (
+            "pless.toml points at a throwaway VM. Restore it to the checked-in default."
+        )
+
 
 class TestLinks:
     """Relative links between docs pages must resolve."""

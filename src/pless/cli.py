@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -649,8 +650,13 @@ def preflight_cmd(
         paperless_healthy=healthy,
         audit_clean=audit_clean,
         drill_passed=drill_passed,
-        backup_configured=bool(cfg.backup.restic_repository),
-        backup_verified=False,  # no verified restore exists until backup is built
+        backup_configured=cfg.backup.is_configured,
+        # A real answer at last, read from the record `pless backup verify`
+        # leaves on the target. Missing, failed, unreadable and stale all count
+        # as "no", because silence here would read as approval.
+        backup_verified=(
+            reachable and cfg.backup.is_configured and backup.is_verified(cfg, target)
+        ),
     )
 
     for check in report.checks:
@@ -934,6 +940,41 @@ def backup_export() -> None:
     )
 
 
+@backup_app.command("verify")
+def backup_verify(
+    level: str = typer.Option(
+        "content",
+        "--level",
+        help="content: restore a sample and compare. full: a whole rehearsal (not built yet).",
+    ),
+) -> None:
+    """Prove the documents come back, by restoring rather than by inspecting."""
+    cfg = config.load_config()
+    target = _host(cfg)
+
+    if level == "full":
+        _fail(
+            "The full restore rehearsal into a throwaway VM is not built yet — see "
+            "https://github.com/kschulst/pless/issues/3. `--level content` restores a "
+            "sample and compares it, which is the cheap half of the same path."
+        )
+    if level != "content":
+        _fail(f"Unknown level {level!r}. Use 'content'.")
+
+    console.print("Verifying: restoring a sample from the newest snapshot…")
+    try:
+        record = backup.verify(target)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    if record.passed:
+        console.print(f"[green bold]✓ {record.detail}[/green bold]")
+    else:
+        console.print(f"[red]✗ {record.detail}[/red]")
+        raise typer.Exit(code=1)
+
+
 @backup_app.command("status")
 def backup_status(
     json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
@@ -950,6 +991,7 @@ def backup_status(
 
     try:
         record = backup.read_run_record(target)
+        verification = backup.read_verification_record(target)
         snaps = backup.snapshots(target)
         timer = backup.timer_state(target)
     except backup.BackupError as exc:
@@ -957,6 +999,13 @@ def backup_status(
         return
 
     latest = backup.latest_snapshot(snaps)
+    # A record on the target is only as trustworthy as the target, but it names
+    # a snapshot — so the claim is checkable against the repository rather than
+    # taken on trust (ADR 0019).
+    known_ids = {s.id for s in snaps}
+    verified_snapshot_missing = bool(
+        verification and verification.snapshot_id and verification.snapshot_id not in known_ids
+    )
     if json_output:
         console.print_json(
             data={
@@ -973,6 +1022,17 @@ def backup_status(
                     "queue_moved_during_run": record.queue_moved_during_run,
                 }
                 if record
+                else None,
+                "verification": {
+                    "level": str(verification.level),
+                    "performed_at": verification.performed_at,
+                    "passed": verification.passed,
+                    "snapshot_id": verification.snapshot_id,
+                    "documents_found": verification.documents_found,
+                    "sample_size": verification.sample_size,
+                    "snapshot_still_present": not verified_snapshot_missing,
+                }
+                if verification
                 else None,
             }
         )
@@ -1000,6 +1060,28 @@ def backup_status(
         console.print(
             f"[red]✗[/red] Last run {record.finished_at or '(unfinished)'}: "
             f"{record.outcome} — {record.detail}"
+        )
+
+    if verification is None:
+        console.print(
+            "[yellow]•[/yellow] Never verified. A backup that has not been restored is a "
+            "belief — run `pless backup verify`."
+        )
+    else:
+        mark = "[green]✓[/green]" if verification.passed else "[red]✗[/red]"
+        console.print(f"{mark} Verified {verification.performed_at}: {verification.detail}")
+        if verification.passed and verification.is_stale(
+            cfg.backup.verify_max_age_days, datetime.now(UTC)
+        ):
+            console.print(
+                f"[yellow]•[/yellow] That is older than {cfg.backup.verify_max_age_days} days, "
+                "so `pless preflight` no longer counts it."
+            )
+    if verified_snapshot_missing and verification:
+        console.print(
+            f"[red]✗[/red] The verification record names snapshot "
+            f"{verification.snapshot_id[:8]}, which is not in the repository. Either it was "
+            "pruned since, or the record does not describe this repository."
         )
 
 

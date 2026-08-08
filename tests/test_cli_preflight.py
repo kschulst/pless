@@ -18,7 +18,9 @@ passing while the command breaks.
 from __future__ import annotations
 
 import inspect
+import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -160,3 +162,123 @@ class TestTheFakes:
 
     def test_config_fake_matches_load_config(self) -> None:
         assert _parameters(_load_config) == _parameters(config.load_config)
+
+
+# --- Verification wiring ---------------------------------------------------
+#
+# `backup_verified` was hard-coded False until stage 2. What replaced it decides
+# whether the tool tells you it is safe to import documents, so every way of
+# answering "no" is worth pinning: no record, a failed one, an expired one, and
+# one that cannot say when it ran.
+
+
+def _configured(path: Path | None = None) -> config.Config:
+    """A host with an off-site repository configured."""
+    return config.Config(
+        host=config.HostConfig(address="nowhere.invalid", user="deploy"),
+        backup=config.BackupConfig(restic_repository="/mnt/backup/restic"),
+    )
+
+
+def _record(performed_at: str, passed: bool = True) -> str:
+    return json.dumps(
+        {
+            "level": "content",
+            "performed_at": performed_at,
+            "snapshot_id": "abcd1234",
+            "repository_kind": "local",
+            "passed": passed,
+            "documents_expected": 12,
+            "documents_found": 12,
+            "sample_size": 5,
+            "mismatches": [],
+            "detail": "Restored 5 of 5 sampled files.",
+        }
+    )
+
+
+def _answering_with(record: str | None) -> Callable[..., sshexec.SshResult]:
+    def answer(
+        destination: list[str],
+        remote_command: str,
+        timeout: int = 60,
+        input_text: str | None = None,
+    ) -> sshexec.SshResult:
+        if record is not None and "verification.json" in remote_command:
+            return sshexec.SshResult(exit_code=0, stdout=record, stderr="")
+        if record is None and "verification.json" in remote_command:
+            return sshexec.SshResult(exit_code=1, stdout="", stderr="")
+        return _answers(destination, remote_command, timeout, input_text)
+
+    return answer
+
+
+def _flat(result: Result) -> str:
+    """Output with wrapping collapsed.
+
+    `rich` wraps to terminal width, so any assertion on a phrase longer than a
+    few words is really an assertion about where the line broke.
+    """
+    return " ".join(result.output.split())
+
+
+def _hours_ago(hours: int) -> str:
+    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@pytest.fixture
+def with_verification(monkeypatch: pytest.MonkeyPatch) -> Callable[[str | None], None]:
+    def apply(record: str | None) -> None:
+        monkeypatch.setattr(config, "load_config", _configured)
+        monkeypatch.setattr(sshexec, "run", _answering_with(record))
+
+    return apply
+
+
+class TestRestoreVerified:
+    def test_a_recent_passing_record_gives_a_green_light(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        with_verification(_record(_hours_ago(1)))
+        result = _preflight()
+        assert "A restore has been performed and the documents came back." in _flat(result)
+        assert result.exit_code == 0  # nothing blocking left
+
+    def test_no_record_is_not_verified(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        with_verification(None)
+        result = _preflight()
+        assert result.exit_code == 1
+        assert "A backup that has not been restored is a belief" in _flat(result)
+
+    def test_a_failed_record_is_not_verified(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        with_verification(_record(_hours_ago(1), passed=False))
+        result = _preflight()
+        assert result.exit_code == 1
+
+    def test_an_expired_record_is_not_verified(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        # 15 days against a 14-day window: a restore proved long enough ago
+        # says little about a repository written to every day since.
+        with_verification(_record(_hours_ago(24 * 15)))
+        result = _preflight()
+        assert result.exit_code == 1
+
+    def test_a_record_that_cannot_say_when_is_not_verified(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        with_verification(_record(""))
+        result = _preflight()
+        assert result.exit_code == 1
+
+    def test_unreadable_json_does_not_crash_preflight(
+        self, with_verification: Callable[[str | None], None]
+    ) -> None:
+        # Preflight must still deliver a verdict when the record is corrupt.
+        with_verification("{not json")
+        result = _preflight()
+        assert result.exit_code == 1
