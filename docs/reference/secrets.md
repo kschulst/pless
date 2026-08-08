@@ -173,31 +173,39 @@ those are already encrypted before they leave the machine.
 
 **If you lose them.** Create a new application key in the B2 console. Nothing is lost.
 
-**If someone else gets them.** They can permanently destroy every snapshot in the bucket.
+**If someone else gets them.** They can disrupt your backups, but not destroy them — provided
+the key was created correctly. See below, because "correctly" is not what the web console does.
 
-!!! danger "The machine's key can delete the backup, and this is not yet solved"
+!!! danger "The B2 web console cannot create a safe key"
 
-    restic creates and removes files in `locks/` during an ordinary backup, so the key on the
-    machine must have B2's `deleteFiles` capability. That capability authorises
-    [`b2_delete_file_version`](https://www.backblaze.com/docs/cloud-storage-file-versions),
-    which removes a specific version **permanently** — "as if you never uploaded that
-    version". Bucket versioning and a lifecycle rule do not prevent this: they govern
-    *automatic* cleanup of hidden and superseded versions, not explicit deletion.
+    A key created in the console with "Read and Write" comes back holding **all 29
+    capabilities**, including `bypassGovernance` — and ignoring the bucket restriction you
+    selected. That key can delete every locked version in your bucket. Tested: the same attack
+    that a correctly scoped key cannot complete leaves **zero versions** when run with a
+    console key.
 
-    So whoever holds the machine can enumerate every version and delete it. Until
-    [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
-    settles on a mechanism that actually enforces retention — Object Lock is the likely
-    answer — **treat the off-site copy as destroyable by anyone who takes the machine**, and
-    keep a second copy somewhere the machine has no credentials for.
+    A safe key exists only through `b2_create_key` in the API, with exactly `listBuckets`,
+    `listFiles`, `readFiles`, `writeFiles` and `deleteFiles`, restricted to one bucket, and
+    **without `bypassGovernance`**. That single exclusion is the whole protection
+    ([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)).
 
-    Scope the key to a single bucket anyway, with no `writeBuckets`, `deleteBuckets`,
-    `writeBucketRetentions`, `writeKeys` or `deleteKeys`. That limits the blast radius to one
-    bucket and stops the key reconfiguring the bucket itself. It does not make the data
-    undeletable, and this page will not pretend otherwise.
+    `pless audit` fails when the target holds a key that can bypass governance.
 
-**Reissuing.** Create a replacement in the B2 console scoped the same way — one bucket, no
-bucket-settings capabilities. The console offers a full-access key by default.
+**Why it can delete at all.** restic creates and removes files in `locks/` during an ordinary
+backup, so the key must have `deleteFiles`. What stops that becoming destruction is Object Lock
+on the bucket, not the capability list: the service refuses to remove a locked version, and
+returns `Access Denied` to a key without `bypassGovernance`.
 
+**What an attacker can still do.** Create delete markers and leave stale locks, which makes the
+repository stop responding. No data is lost. Recovery is one command:
+
+```console
+$ restic unlock --remove-all
+successfully removed 4 locks
+```
+
+**Reissuing.** Create the replacement through the API with the same five capabilities, not in
+the console.
 
 **The master application key** — the one B2 gives you when you create the account — never goes
 on the machine. Keep it in your vault; it is what you use to fix things after a compromise.

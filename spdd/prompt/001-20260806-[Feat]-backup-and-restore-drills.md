@@ -206,17 +206,19 @@ plain string, and its "kind" is a derived property, never a stored enum.
      question, with the honest caveat that rclone's OAuth flow on a headless machine is
      materially harder than B2, rather than a code question.
 
-3. **Tamper resistance is unresolved, and nothing may claim otherwise**
-   ([ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md)):
+3. **Tamper resistance comes from Object Lock**
+   ([ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md), verified against a real bucket
+   in issue #14):
    - restic creates and deletes files in `locks/` during ordinary operation, so a key without
      delete permission cannot be used. The target therefore holds a key with full read/write/
      delete on **one bucket only**, and no capability to change bucket settings.
-   - **Unresolved.** Versioning plus a lifecycle rule does *not* provide this: B2's
-     `deleteFiles`, which restic requires for `locks/`, authorises `b2_delete_file_version` —
-     permanent removal of a specific version. Lifecycle rules govern automatic cleanup, not
-     explicit deletion. Object Lock is the leading candidate and needs testing against a real
-     account first. Until then the honest position is that whoever takes the machine can destroy
-     the off-site copy, and `mirror` to a location the machine cannot reach is the answer.
+   - The bucket carries Object Lock in **governance** mode with a default retention period, and
+     the machine's key lacks `bypassGovernance`. Versioning plus a lifecycle rule does *not*
+     work: `deleteFiles`, which restic requires for `locks/`, authorises permanent version
+     deletion, and lifecycle rules govern only automatic cleanup.
+   - The repository is an **`s3:` URL** against B2's S3 endpoint, not `b2:`. A delete through the
+     S3 API becomes a delete marker, which Object Lock permits; the native backend removes
+     versions outright, which a lock refuses.
    - What `audit` can check — that the key is scoped to one bucket and cannot change bucket
      settings — it checks as a finding that fails a build. What it must not do is report the
      setup as tamper-resistant on that basis.
@@ -230,9 +232,14 @@ plain string, and its "kind" is a derived property, never a stored enum.
      silent inconsistency is worse than a noted one.
 
 5. **Verification is one code path at two depths**:
-   - Content level restores the latest snapshot's manifest plus a random sample of originals to a
-     scratch directory, compares the document count against the count the run recorded, and
-     compares each sampled file's checksum against the manifest entry that describes it.
+   - Content level restores a random sample from the latest snapshot and compares the document
+     count against the count the run recorded.
+
+     **Amended during Stage 2.** The canvas originally specified hashing each sampled file against
+     Paperless's own manifest entry. restic verifies content hashes as it restores, so a sample
+     that comes back *is* a sample proven intact, and `restic ls` gives the document count without
+     moving any data. Nothing now depends on Paperless manifest internals, and the cheap level
+     stays cheap.
    - The comparison baseline is pinned to the **snapshot's own manifest and the run record that
      produced it** — not the live archive, which will legitimately have moved on by the time
      verification runs. A drift against the live count is reported as information, never as a
@@ -326,13 +333,13 @@ suggestion: several real bugs in this project were invisible to tests and obviou
 the code ran on a machine, and a change this size with a single verification at the end would
 find them all at once, weeks after they were written.
 
-1. **Repository and pipeline** — `BackupConfig`, `restic` in the host spec, `render_backup_env`,
-   `render_units`, quiescence, `run()`, the run record, `backup init/run/export/status`. At the
-   end of this stage the archive has an encrypted off-site copy on a timer, which alone removes
-   "this machine holds the only copy".
-2. **Verification and readiness** — `verify_content`, the verification record, the snapshot-id
-   cross-check, `preflight` wired to a real result. At the end of this stage `pless preflight`
-   can give a green light honestly.
+1. **Repository and pipeline** — ✅ landed. `BackupConfig`, `restic` in the host spec,
+   `render_backup_env`, `render_units`, quiescence, `run()`, the run record,
+   `backup init/run/export/status`. Drilled on a VM, which found the locked-volume bug.
+2. **Verification and readiness** — ✅ implemented and drilled. The verification script and
+   record, the snapshot-id cross-check, `preflight` reading a real result. The drill found two
+   more bugs: filenames with spaces breaking `--include`, and `s3:` repositories receiving no
+   credentials at all.
 3. **Restore** — `restore`, `verify_full` into a throwaway VM. The stage that proves the
    procedure, not just the data.
 4. **Audit and escape hatches** — the B2 credential and bucket findings, `extract`, `mirror`,
@@ -531,12 +538,15 @@ repository kind is a first-class citizen rather than a test fixture.
 3. `check_backup_credential(capability: CredentialCapability) -> Finding`:
    - CRITICAL when the key is not restricted to a single bucket, or holds any of
      `writeBuckets`, `deleteBuckets`, `writeBucketRetentions`, `writeKeys`, `deleteKeys` — those
-     let a compromised machine reconfigure the bucket itself. Scope limits blast radius; it does
-     not make data undeletable, and the finding's wording must not imply that it does.
+     let a compromised machine reconfigure the bucket itself — and above all `bypassGovernance`,
+     which defeats Object Lock outright and is what a key created in B2's web console actually
+     carries.
    - OK otherwise, stating the bucket name and that the key cannot change bucket settings.
-4. `check_bucket_protection(...)` — **deferred until ADR 0017 settles on a mechanism.** A check
-   that passes on versioning plus a lifecycle rule would certify a setup that a compromised
-   machine can still destroy, and a green check is worse than no check.
+4. `check_bucket_protection(protection: BucketProtection, required_days: int) -> Finding`:
+   - CRITICAL when the bucket has no Object Lock default retention, or when the period is shorter
+     than `version_retention_days`.
+   - Versioning and lifecycle rules are **not** accepted as evidence — they do not stop explicit
+     version deletion, and a check that passed on them would certify a destroyable setup.
 5. `check_backup_locality(repository: str) -> Finding`:
    - WARNING for a local repository, saying in one sentence that it protects against deletion and
      corruption but not against loss of the machine.

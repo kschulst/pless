@@ -232,16 +232,32 @@ it wakes.
 runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--keep-weekly`,
 `--keep-monthly` and `--keep-yearly`.
 
-!!! danger "The machine can destroy the off-site copy"
+**`version_retention_days`** is what the bucket's Object Lock default retention is expected to
+be. `pless` does not set it — a key that could would be a key that could remove it — but
+`pless audit` checks the bucket against this number.
 
-    **`version_retention_days`** is reserved, and it does not yet buy you anything. restic needs
-    delete permission for its lock files, and on B2 that capability permits *permanent* deletion
-    of a specific version. Bucket versioning and a lifecycle rule govern automatic cleanup, not
-    explicit deletion — so whoever takes the machine can enumerate and destroy every version.
+!!! warning "The bucket and the key must be made through the API"
 
-    Until [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
-    settles on a mechanism that enforces retention against a delete-capable key, keep a second
-    copy somewhere the machine has no credentials for — see `pless backup mirror`.
+    Object Lock is what stops a compromised machine destroying your snapshots, and neither half
+    of it can be configured correctly from the B2 web console:
+
+    - The create-bucket dialog offers Object Lock as **"Compliance mode only"**. Compliance
+      cannot be lifted by anyone, including you, until it expires — Backblaze's remedy for a
+      period set too long is closing your account. Governance is what you want, and it is
+      settable only through `b2_update_bucket`.
+    - A console key with "Read and Write" comes back with **all 29 capabilities**, including
+      `bypassGovernance`, which defeats Object Lock entirely.
+
+    See [Secrets](secrets.md) for the capabilities a machine key must and must not have, and
+    [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
+    for the evidence behind it.
+
+!!! note "Use the S3 endpoint, not `b2:`"
+
+    For Backblaze, set `restic_repository` to
+    `s3:https://s3.<region>.backblazeb2.com/<bucket>`. A delete through the S3 API becomes a
+    delete marker, which Object Lock permits, so restic works normally. The native `b2:`
+    backend deletes file versions outright, which a lock refuses.
 
 **`exporter_delete`** is off by default: `pless` does not delete things you did not ask it to
 delete. Turning it on keeps the export directory from growing, at the cost of a partially failed

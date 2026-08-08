@@ -27,7 +27,7 @@ which is for people *using* `pless`.
 | [0014](0014-secrets-never-in-argv.md) | Pass secrets on stdin, never in argv | Accepted |
 | [0015](0015-documentation-drift-is-a-build-failure.md) | Documentation drift is a build failure | Accepted |
 | [0016](0016-there-is-only-a-host.md) | There is only a host; provisioning is a separate, optional step | Accepted |
-| [0017](0017-tamper-resistance-in-the-bucket.md) | A credential the machine holds cannot protect the archive from the machine | Proposed — [#14](https://github.com/kschulst/pless/issues/14) |
+| [0017](0017-tamper-resistance-in-the-bucket.md) | Tamper resistance comes from Object Lock, not from withholding delete | Accepted |
 | [0018](0018-no-plaintext-copy-on-the-operators-machine.md) | A plaintext local copy is not a backup layer | Accepted |
 | [0019](0019-the-verification-record-lives-on-the-target.md) | The verification record lives on the target, and names a snapshot | Accepted |
 
