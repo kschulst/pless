@@ -274,10 +274,10 @@ def render_backup_env(cfg: config.Config, secrets: config.Secrets) -> str:
     # variable names restic reads differ. A B2 application key doubles as an
     # S3 credential, which is what makes the S3 endpoint usable at all.
     if cfg.backup.repository_kind in ("b2", "s3"):
-        if not secrets.b2_account_id:
-            missing.append("B2_ACCOUNT_ID in .env (the keyID)")
-        if not secrets.b2_account_key:
-            missing.append("B2_ACCOUNT_KEY in .env (the applicationKey)")
+        if not secrets.b2_key_id:
+            missing.append("B2_KEY_ID in .env (the keyID)")
+        if not secrets.b2_application_key:
+            missing.append("B2_APPLICATION_KEY in .env (the applicationKey)")
     if missing:
         raise BackupError(
             "Backup is not configured yet. Missing: "
@@ -291,13 +291,17 @@ def render_backup_env(cfg: config.Config, secrets: config.Secrets) -> str:
         f"RESTIC_REPOSITORY={_shell_quote(cfg.backup.restic_repository)}",
         f"RESTIC_PASSWORD={_shell_quote(secrets.restic_password)}",
     ]
-    # restic reads different variable names per backend, from the same credential.
+    # This is the translation boundary. Our configuration uses the names B2 puts
+    # on screen — keyID and applicationKey — because that is what the operator
+    # is copying from. restic wants its own names, and different ones per
+    # backend, from the very same credential. Neither side has to know about
+    # the other's vocabulary.
     if cfg.backup.repository_kind == "b2":
-        lines.append(f"B2_ACCOUNT_ID={_shell_quote(secrets.b2_account_id)}")
-        lines.append(f"B2_ACCOUNT_KEY={_shell_quote(secrets.b2_account_key)}")
+        lines.append(f"B2_ACCOUNT_ID={_shell_quote(secrets.b2_key_id)}")
+        lines.append(f"B2_ACCOUNT_KEY={_shell_quote(secrets.b2_application_key)}")
     elif cfg.backup.repository_kind == "s3":
-        lines.append(f"AWS_ACCESS_KEY_ID={_shell_quote(secrets.b2_account_id)}")
-        lines.append(f"AWS_SECRET_ACCESS_KEY={_shell_quote(secrets.b2_account_key)}")
+        lines.append(f"AWS_ACCESS_KEY_ID={_shell_quote(secrets.b2_key_id)}")
+        lines.append(f"AWS_SECRET_ACCESS_KEY={_shell_quote(secrets.b2_application_key)}")
     lines.append("export RESTIC_REPOSITORY RESTIC_PASSWORD")
     if cfg.backup.repository_kind == "b2":
         lines.append("export B2_ACCOUNT_ID B2_ACCOUNT_KEY")

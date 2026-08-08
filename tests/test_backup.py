@@ -26,8 +26,8 @@ def a_config(**backup_overrides) -> config.Config:
 def some_secrets(**overrides) -> config.Secrets:
     values = {
         "restic_password": "9K2M4-XR7TQ-B8HNV-5WGDC-3PFJZ",
-        "b2_account_id": "id-0001",
-        "b2_account_key": "key-0001",
+        "b2_key_id": "id-0001",
+        "b2_application_key": "key-0001",
     }
     values.update(overrides)
     return config.Secrets(**values)
@@ -69,12 +69,12 @@ class TestRenderBackupEnv:
 
     def test_b2_repository_requires_b2_credentials(self) -> None:
         cfg = a_config(restic_repository="b2:bucket:paperless")
-        with pytest.raises(backup.BackupError, match="B2_ACCOUNT_ID"):
-            backup.render_backup_env(cfg, some_secrets(b2_account_id=""))
+        with pytest.raises(backup.BackupError, match="B2_KEY_ID"):
+            backup.render_backup_env(cfg, some_secrets(b2_key_id=""))
 
     def test_local_repository_needs_no_b2_credentials(self) -> None:
         cfg = a_config(restic_repository="/mnt/backup/restic")
-        rendered = backup.render_backup_env(cfg, some_secrets(b2_account_id="", b2_account_key=""))
+        rendered = backup.render_backup_env(cfg, some_secrets(b2_key_id="", b2_application_key=""))
         assert "B2_ACCOUNT_ID" not in rendered
 
     def test_points_at_the_documented_way_to_get_a_passphrase(self) -> None:
@@ -90,7 +90,7 @@ class TestRenderBackupEnv:
         cfg = a_config(restic_repository="b2:bucket:paperless")
         rendered = backup.render_backup_env(cfg, some_secrets())
         assert "export RESTIC_REPOSITORY RESTIC_PASSWORD" in rendered
-        assert "export B2_ACCOUNT_ID B2_ACCOUNT_KEY" in rendered
+        assert "export B2_ACCOUNT_ID B2_ACCOUNT_KEY" in rendered  # restic's names
 
 
 class TestRenderScript:
@@ -510,18 +510,39 @@ class TestS3RepositoryCredentials:
 
     def test_an_s3_repository_without_credentials_is_refused(self) -> None:
         cfg = a_config(restic_repository="s3:https://s3.example.com/archive")
-        with pytest.raises(backup.BackupError, match="B2_ACCOUNT_ID"):
-            backup.render_backup_env(cfg, some_secrets(b2_account_id=""))
+        with pytest.raises(backup.BackupError, match="B2_KEY_ID"):
+            backup.render_backup_env(cfg, some_secrets(b2_key_id=""))
 
     def test_the_error_says_which_value_b2_calls_it(self) -> None:
-        # "B2_ACCOUNT_ID" is restic's name; the console shows "keyID".
+        # "B2_KEY_ID" is restic's name; the console shows "keyID".
         cfg = a_config(restic_repository="s3:https://s3.example.com/archive")
         with pytest.raises(backup.BackupError, match="keyID"):
-            backup.render_backup_env(cfg, some_secrets(b2_account_id=""))
+            backup.render_backup_env(cfg, some_secrets(b2_key_id=""))
 
     def test_a_local_repository_still_needs_no_credentials(self) -> None:
         rendered = backup.render_backup_env(
             a_config(restic_repository="/mnt/backup"),
-            some_secrets(b2_account_id="", b2_account_key=""),
+            some_secrets(b2_key_id="", b2_application_key=""),
         )
         assert "AWS_ACCESS_KEY_ID" not in rendered and "B2_ACCOUNT_ID" not in rendered
+
+
+class TestTheCredentialNamingBoundary:
+    """Our config uses B2's words; the rendered file uses restic's.
+
+    A blind rename once changed both at the same time, which would have written
+    an environment file restic does not read — the backup would have failed to
+    authenticate, off the machine, days later.
+    """
+
+    def test_configuration_uses_the_names_b2_shows_the_operator(self) -> None:
+        fields = set(config.Secrets.model_fields)
+        assert {"b2_key_id", "b2_application_key"} <= fields
+        assert "b2_account_id" not in fields
+
+    def test_the_rendered_file_uses_the_names_restic_reads(self) -> None:
+        rendered = backup.render_backup_env(
+            a_config(restic_repository="b2:bucket:paperless"), some_secrets()
+        )
+        assert "B2_ACCOUNT_ID=" in rendered
+        assert "B2_KEY_ID=" not in rendered
