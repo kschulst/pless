@@ -471,4 +471,57 @@ class TestRenderVerifyScript:
     def test_restores_a_sample_rather_than_the_archive(self) -> None:
         script = backup.render_verify_script(a_config())
         assert "shuf -n" in script
-        assert "--include=" in script
+
+    def test_sampled_paths_survive_spaces_in_filenames(self) -> None:
+        """Paperless filenames contain spaces — that is the normal case.
+
+        Found on a VM: building `--include=` arguments into a string and
+        expanding it unquoted split every filename in half, and restic read the
+        fragments as extra snapshot IDs. `sh -n` parses that happily, so only
+        real filenames reveal it. Positional parameters keep the spaces.
+        """
+        script = backup.render_verify_script(a_config())
+        assert 'set -- "$@" --include "$sample_path"' in script
+        assert '--target "$SCRATCH" "$@"' in script
+        assert "--include=" not in script  # the form that split on spaces
+
+
+class TestS3RepositoryCredentials:
+    """An s3: repository needs credentials too, under different names.
+
+    Missed until a B2 bucket was being set up by hand: the env file emitted
+    credentials only for `b2:` repositories, so an `s3:` one — the endpoint
+    Object Lock actually works through — would have authenticated with nothing.
+    """
+
+    def test_an_s3_repository_gets_aws_style_credentials(self) -> None:
+        cfg = a_config(restic_repository="s3:https://s3.eu-central-003.backblazeb2.com/archive")
+        rendered = backup.render_backup_env(cfg, some_secrets())
+        assert "AWS_ACCESS_KEY_ID='id-0001'" in rendered
+        assert "AWS_SECRET_ACCESS_KEY='key-0001'" in rendered
+        assert "export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY" in rendered
+
+    def test_a_b2_repository_still_gets_b2_style_credentials(self) -> None:
+        rendered = backup.render_backup_env(
+            a_config(restic_repository="b2:bucket:x"), some_secrets()
+        )
+        assert "B2_ACCOUNT_ID='id-0001'" in rendered
+        assert "AWS_ACCESS_KEY_ID" not in rendered
+
+    def test_an_s3_repository_without_credentials_is_refused(self) -> None:
+        cfg = a_config(restic_repository="s3:https://s3.example.com/archive")
+        with pytest.raises(backup.BackupError, match="B2_ACCOUNT_ID"):
+            backup.render_backup_env(cfg, some_secrets(b2_account_id=""))
+
+    def test_the_error_says_which_value_b2_calls_it(self) -> None:
+        # "B2_ACCOUNT_ID" is restic's name; the console shows "keyID".
+        cfg = a_config(restic_repository="s3:https://s3.example.com/archive")
+        with pytest.raises(backup.BackupError, match="keyID"):
+            backup.render_backup_env(cfg, some_secrets(b2_account_id=""))
+
+    def test_a_local_repository_still_needs_no_credentials(self) -> None:
+        rendered = backup.render_backup_env(
+            a_config(restic_repository="/mnt/backup"),
+            some_secrets(b2_account_id="", b2_account_key=""),
+        )
+        assert "AWS_ACCESS_KEY_ID" not in rendered and "B2_ACCOUNT_ID" not in rendered
