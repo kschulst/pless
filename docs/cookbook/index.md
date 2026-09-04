@@ -33,9 +33,12 @@ more useful than writing instructions that do not work:
 - **[Importing your documents](https://github.com/kschulst/pless/issues/1)** — not built.
   `pless docs scan` and `pless docs estimate` already work, so you can survey and size your
   collection today.
-- **[Backup and restore](https://github.com/kschulst/pless/issues/2)** — not built, along with
-  [restore drills](https://github.com/kschulst/pless/issues/3).
+Backup and restore **are** built: `pless backup init` puts snapshots off-site on a timer,
+`pless backup verify` proves the documents come back by restoring them, and `pless backup
+verify --level full` rehearses the whole procedure on a machine built from nothing. The
+[escape hatches](https://github.com/kschulst/pless/issues/2) — `extract`, `mirror` and
+`forget` — are still missing.
 
-Until those land, keep your originals where they already are. Treat this archive as a
+Until importing lands, keep your originals where they already are. Treat this archive as a
 searchable index of documents you still hold elsewhere — and note that `pless preflight` will
 tell you the same thing, in as many words.
