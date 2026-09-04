@@ -340,8 +340,9 @@ find them all at once, weeks after they were written.
    record, the snapshot-id cross-check, `preflight` reading a real result. The drill found two
    more bugs: filenames with spaces breaking `--include`, and `s3:` repositories receiving no
    credentials at all.
-3. **Restore** — `restore`, `verify_full` into a throwaway VM. The stage that proves the
-   procedure, not just the data.
+3. **Restore** — ✅ implemented. `backup.restore`, and `drill.verify_full` into a throwaway VM
+   — the stage that proves the procedure, not just the data. `verify_full` moved to a new
+   `drill.py` to keep `backup` from depending on `deploy` and `vm`.
 4. **Audit and escape hatches** — the B2 credential and bucket findings, `extract`, `mirror`,
    `forget`, and the cookbook page.
 
@@ -475,6 +476,25 @@ repository kind is a first-class citizen rather than a test fixture.
 4. `write_record(target, path: str, payload: str) -> None`: `tee` from stdin, mode 0600.
 
 ### Implement verification — `backup.verify_content` and `backup.verify_full`
+
+!!! note "Amended during Stage 3"
+
+    `verify_full` does **not** live in `backup.py`. The dependency rule two sections down says
+    `backup` must not grow a dependency on `deploy`, and a rehearsal needs `vm`, `bootstrap`,
+    `storage` and `deploy` as well — so putting it there would have inverted the layering and
+    made the lowest module depend on nearly everything. It lives in a new `drill.py` that sits
+    *above* `backup`, keeping both honest. Same function, same signature, one module up.
+
+    Two behaviours were decided during implementation and are worth stating:
+
+    - **A refusal to rehearse writes no record.** A missing VM tool, a local repository or an
+      empty repository raise before anything is created. "The drill could not be run" is not
+      "the restore failed", and letting the operator's laptop overwrite a good content
+      verification would make `preflight` report a problem the backup does not have. Once the
+      rehearsal machine exists, every exit writes a record.
+    - **A failed rehearsal leaves its VM standing.** The canvas said to destroy it. A drill that
+      fails is the one case where the machine is worth looking at, and destroying it destroys
+      the evidence. The command says so, and names the machine.
 
 1. `select_sample(paths: list[str], size: int, seed: int | None = None) -> list[str]`: pure,
    deterministic under a seed so tests are stable.
