@@ -340,9 +340,11 @@ find them all at once, weeks after they were written.
    record, the snapshot-id cross-check, `preflight` reading a real result. The drill found two
    more bugs: filenames with spaces breaking `--include`, and `s3:` repositories receiving no
    credentials at all.
-3. **Restore** — ✅ implemented. `backup.restore`, and `drill.verify_full` into a throwaway VM
-   — the stage that proves the procedure, not just the data. `verify_full` moved to a new
-   `drill.py` to keep `backup` from depending on `deploy` and `vm`.
+3. **Restore** — ✅ implemented and drilled. `backup.restore`, and `drill.verify_full` into a
+   throwaway VM — the stage that proves the procedure, not just the data. `verify_full` moved
+   to a new `drill.py` to keep `backup` from depending on `deploy` and `vm`. Drilled against an
+   S3 repository reachable by both machines, which is the arrangement a real off-site
+   repository has; it passed without finding a bug, the first stage that did.
 4. **Audit and escape hatches** — the B2 credential and bucket findings, `extract`, `mirror`,
    `forget`, and the cookbook page.
 
