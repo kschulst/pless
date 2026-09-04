@@ -168,7 +168,7 @@ target. No snapshot, no database dump.
 Useful for inspecting what an export contains. It is not a backup: the export sits on the same
 machine as the archive.
 
-### `pless backup verify [--level content]`
+### `pless backup verify [--level content|full]`
 
 Proves the documents come back, by restoring them rather than by checking that an archive file
 exists.
@@ -184,8 +184,36 @@ makes it cheap enough to run on a timer. It runs weekly by default; see `verify_
 The result is written to the target and is what `pless preflight` reads. An empty repository
 fails: one that was silently recreated looks exactly like success and contains nothing.
 
-`--level full`, the whole rehearsal into a throwaway VM, is
-[not built yet](https://github.com/kschulst/pless/issues/3).
+`--level full` proves the *procedure* rather than the data. It creates a second VM, bootstraps
+it, gives it an encrypted volume and a Paperless stack, restores the snapshot into it and counts
+what came back — then destroys it. A machine that has never held the archive producing the
+documents from nothing but the repository and your secrets is the only check that would notice a
+missing step in the restore path itself.
+
+It costs a VM, a few gigabytes of downloads and tens of minutes, so it is a thing you run
+deliberately — never on a timer. A rehearsal that *fails* leaves its VM standing, because that
+is the one worth looking at.
+
+It needs a repository the second machine can reach, so it refuses a local repository on the
+target and tells you to use `--level content` instead.
+
+The record it writes says `"level": "full"`, and `pless preflight` treats it like any other
+verification: recent, passed, and naming a snapshot that is still in the repository.
+
+### `pless backup restore [--snapshot ID] --confirm`
+
+Restores a snapshot into a **fresh** installation and imports it into Paperless. Asks you to type
+the host label, the way `pless vm destroy` asks for the VM name.
+
+It refuses a target that already holds documents. Paperless's importer merges into whatever is
+already there, and nothing in the result records which document came from which — so a restore
+onto a live archive leaves an installation that is neither the backup nor what it was before,
+with no way back. Restore into a new machine instead.
+
+The restore puts the export tree and the database dump back where they were taken from, then runs
+`document_importer` inside the stack. Afterwards, run `pless backup init` on the restored machine:
+it is not backing anything up until you do, and a restored machine that never takes a snapshot is
+one failure away from where you started.
 
 ### `pless backup status [--json]`
 
@@ -271,6 +299,8 @@ Verifies `HCLOUD_TOKEN` with read-only API calls and lists visible servers and l
 
 ## Not built yet
 
-`pless docs upload`, `pless backup export`, `pless backup download`, `pless backup verify`
-and `pless update` are planned but do not exist. See [Cookbook](../cookbook/index.md) for
-what to do in the meantime.
+`pless docs upload`, `pless update`, and the backup escape hatches — `pless backup extract`,
+`pless backup mirror` and `pless backup forget` — are planned but do not exist. `extract`
+replaces what earlier drafts called `pless backup download`
+([ADR 0018](https://github.com/kschulst/pless/blob/main/adr/0018-no-plaintext-copy-on-the-operators-machine.md)).
+See [Cookbook](../cookbook/index.md) for what to do in the meantime.

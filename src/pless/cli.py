@@ -24,6 +24,7 @@ from pless import (
     deploy,
     diskcheck,
     docscan,
+    drill,
     hetzner,
     hostfile,
     hostspec,
@@ -945,21 +946,22 @@ def backup_verify(
     level: str = typer.Option(
         "content",
         "--level",
-        help="content: restore a sample and compare. full: a whole rehearsal (not built yet).",
+        help="content: restore a sample and compare. full: build a machine and restore into it.",
+    ),
+    snapshot: str = typer.Option(
+        "latest", "--snapshot", help="Which snapshot a full rehearsal restores. Default: newest."
     ),
 ) -> None:
     """Prove the documents come back, by restoring rather than by inspecting."""
     cfg = config.load_config()
     target = _host(cfg)
 
+    if level not in ("content", "full"):
+        _fail(f"Unknown level {level!r}. Use 'content' or 'full'.")
+
     if level == "full":
-        _fail(
-            "The full restore rehearsal into a throwaway VM is not built yet — see "
-            "https://github.com/kschulst/pless/issues/3. `--level content` restores a "
-            "sample and compares it, which is the cheap half of the same path."
-        )
-    if level != "content":
-        _fail(f"Unknown level {level!r}. Use 'content'.")
+        _backup_verify_full(cfg, target, snapshot)
+        return
 
     console.print("Verifying: restoring a sample from the newest snapshot…")
     try:
@@ -973,6 +975,71 @@ def backup_verify(
     else:
         console.print(f"[red]✗ {record.detail}[/red]")
         raise typer.Exit(code=1)
+
+
+def _backup_verify_full(cfg: config.Config, target: targets.Host, snapshot: str) -> None:
+    """The rehearsal, which costs a VM and tens of minutes — so it says so first."""
+    sec = config.load_secrets()
+    console.print(
+        f"[bold]A full rehearsal builds {drill.drill_vm_config(cfg).name} from nothing[/bold] — "
+        "bootstrap, encrypted volume, Paperless, then the restore — and destroys it "
+        "afterwards. Expect tens of minutes, and a few gigabytes of downloads."
+    )
+    try:
+        result = drill.verify_full(
+            cfg, sec, target, snapshot, progress=lambda message: console.print(f"  {message}")
+        )
+    except drill.DrillError as exc:
+        _fail(str(exc))
+        return
+
+    if not result.vm_destroyed:
+        console.print(
+            f"[yellow]•[/yellow] {result.vm_name} was left running, because a rehearsal that "
+            "fails is the one worth looking at. Remove it when you are done with it."
+        )
+    if result.record.passed:
+        console.print(f"[green bold]✓ {result.record.detail}[/green bold]")
+    else:
+        console.print(f"[red]✗ {result.record.detail}[/red]")
+        raise typer.Exit(code=1)
+
+
+@backup_app.command("restore")
+def backup_restore(
+    snapshot: str = typer.Option(
+        "latest", "--snapshot", help="Snapshot id to restore. Default: the newest."
+    ),
+    confirm: bool = typer.Option(False, "--confirm", help="Confirm restoring into this target."),
+) -> None:
+    """Restore a snapshot into a fresh installation, and import the documents."""
+    cfg = config.load_config()
+    target = _host(cfg)
+
+    if not confirm:
+        _fail(
+            f"This restores the archive into {target.label} and imports it into Paperless. "
+            "It is meant for a fresh installation, and it refuses one that already holds "
+            "documents. Run again with --confirm."
+        )
+
+    typed = typer.prompt(f"Type the host label ({target.label}) to confirm")
+    if typed != target.label:
+        _fail("The label did not match — aborting.")
+
+    console.print("Restoring. A large archive takes a long time to import…")
+    try:
+        imported = backup.restore(cfg, target, snapshot)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"[green bold]✓ {imported} documents restored into {target.label}.[/green bold]")
+    console.print(
+        "Next: [bold]pless backup init[/bold], so this machine backs up in its own right. "
+        "A restored machine that never takes a snapshot is one failure from being where "
+        "you started."
+    )
 
 
 @backup_app.command("status")
