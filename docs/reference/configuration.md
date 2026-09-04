@@ -317,7 +317,7 @@ TS_AUTHKEY=
 # Paperless API token — created in the Paperless UI after deployment
 PAPERLESS_API_TOKEN=
 
-# Reserved for off-site backup (not built yet)
+# Off-site backup — see `pless backup init`
 RESTIC_PASSWORD=
 B2_KEY_ID=
 B2_APPLICATION_KEY=
