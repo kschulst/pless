@@ -19,6 +19,7 @@ are protected at rest without any extra work.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -49,6 +50,11 @@ VERIFY_SERVICE_UNIT = "/etc/systemd/system/pless-backup-verify.service"
 VERIFY_TIMER_UNIT = "/etc/systemd/system/pless-backup-verify.timer"
 
 SNAPSHOT_TAG = "pless"
+
+# What may be handed to `restic restore`. Everything reaching the target goes
+# through a single-quoted `sh -c`, and the set of legal values is small enough
+# that refusing the rest is clearer than quoting around it.
+SNAPSHOT_ID_PATTERN = re.compile(r"^(latest|[0-9a-f]{8,64})$", re.IGNORECASE)
 
 # A locked volume is the normal state after a reboot, not a failure. The script
 # exits with this, and the unit treats it as success, so a routine skip never
@@ -174,6 +180,24 @@ class VerificationRecord:
         if age is None:
             return True
         return age > max_age_days
+
+    def to_json(self) -> str:
+        """The on-target representation, matching what the verify script writes."""
+        return json.dumps(
+            {
+                "level": str(self.level),
+                "performed_at": self.performed_at,
+                "snapshot_id": self.snapshot_id,
+                "repository_kind": self.repository_kind,
+                "passed": self.passed,
+                "documents_expected": self.documents_expected,
+                "documents_found": self.documents_found,
+                "sample_size": self.sample_size,
+                "mismatches": self.mismatches,
+                "detail": self.detail,
+            },
+            indent=2,
+        )
 
     @classmethod
     def from_json(cls, text: str) -> VerificationRecord:
@@ -750,8 +774,13 @@ def _write_remote_file(target: Host, path: str, content: str, mode: str = "0644"
     _run_ok(target, f"sudo chown root:root {quoted}")
 
 
-def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
-    """Write the environment, the script and the units, then enable the timer."""
+def install_environment(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
+    """Write `backup.env` and the staging directories, and schedule nothing.
+
+    A machine that only has to *read* the repository — the throwaway VM of a
+    full restore rehearsal — needs the credentials and none of the timers.
+    Splitting this out keeps `install` the only thing that schedules work.
+    """
     if not storage.status(cfg, target).is_mounted:
         raise BackupError(
             f"{storage.MOUNTPOINT} is not mounted — run `pless unlock` first. "
@@ -761,6 +790,11 @@ def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
     environment = render_backup_env(cfg, secrets)  # raises before anything is written
     _run_ok(target, f"sudo mkdir -p {STAGING_DIR} {EXPORT_DIR} {SCRIPT_DIR}")
     _write_remote_file(target, ENV_FILE, environment, mode="0600")
+
+
+def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
+    """Write the environment, the script and the units, then enable the timer."""
+    install_environment(cfg, secrets, target)
     _write_remote_file(target, SCRIPT_PATH, render_script(cfg), mode="0700")
     _write_remote_file(target, VERIFY_SCRIPT_PATH, render_verify_script(cfg), mode="0700")
     for path, content in render_units(cfg).items():
@@ -822,6 +856,82 @@ def export_only(cfg: config.Config, target: Host) -> str:
     )
 
 
+def document_count(target: Host) -> int:
+    """How many documents Paperless holds, asked of its own database.
+
+    Not the REST API: `restore` has to answer this before anyone has a token,
+    and this is the same authenticated-over-TCP idiom the dump uses, so the
+    password stays in the container's environment and out of argv (ADR 0014).
+    """
+    query = (
+        'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U paperless -d paperless '
+        '-tAc "select count(*) from documents_document"'
+    )
+    result = _run(
+        target,
+        f"cd {composegen.INSTALL_DIR} && sudo docker compose exec -T db sh -c "
+        + shlex.quote(query),
+    )
+    if not result.ok:
+        raise BackupError(
+            "Could not ask Paperless's database how many documents it holds: "
+            f"{result.stderr.strip() or result.stdout.strip()}. "
+            "The stack has to be running and migrated before a restore can establish "
+            "that the target is empty."
+        )
+    text = result.stdout.strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+    if not text.isdigit():
+        raise BackupError(
+            f"Unexpected answer when counting documents: {text!r}. Refusing to treat that "
+            "as an empty archive."
+        )
+    return int(text)
+
+
+def restore(cfg: config.Config, target: Host, snapshot_id: str = "latest") -> int:
+    """Restore a snapshot into a fresh installation and import it. Returns the count.
+
+    Refuses a target that already holds documents. `document_importer` merges
+    into whatever is there, so running this against a live archive leaves an
+    installation that is neither the backup nor what it was before — and
+    nothing in Paperless records which document came from which.
+    """
+    if not SNAPSHOT_ID_PATTERN.match(snapshot_id):
+        raise BackupError(
+            f"{snapshot_id!r} is not a snapshot id. Pass 'latest', or an id as "
+            "`pless backup status` prints it."
+        )
+    if not storage.status(cfg, target).is_mounted:
+        raise BackupError(
+            f"{storage.MOUNTPOINT} is not mounted — run `pless unlock` first. "
+            "A restore writes the archive, which belongs on the encrypted volume."
+        )
+
+    existing = document_count(target)
+    if existing > 0:
+        raise BackupError(
+            f"{target.label} already holds {existing} documents, and restore targets a "
+            "fresh installation. The importer merges into what is already there, and "
+            "there is no way back from that merge. Restore into a new machine instead."
+        )
+
+    # `--target /` puts the snapshot back at the absolute paths it was taken
+    # from: the export tree the importer reads, and the database dump beside it
+    # for an operator who would rather rebuild postgres directly.
+    _run_ok(
+        target,
+        f"sudo sh -c '. {ENV_FILE} && restic restore {snapshot_id} --target /'",
+        timeout=21600,
+    )
+    _run_ok(
+        target,
+        f"cd {composegen.INSTALL_DIR} && sudo docker compose exec -T webserver "
+        "document_importer /usr/src/paperless/export --no-progress-bar",
+        timeout=21600,
+    )
+    return document_count(target)
+
+
 def verify(target: Host, timeout: int = 3600) -> VerificationRecord:
     """Verify a restore now, by invoking the script the timer invokes.
 
@@ -842,6 +952,17 @@ def verify(target: Host, timeout: int = 3600) -> VerificationRecord:
             f"{result.stderr.strip()}"
         )
     return record
+
+
+def write_verification_record(target: Host, record: VerificationRecord) -> None:
+    """Persist a record on the target, which is where `preflight` reads it.
+
+    A full rehearsal is driven from the operator's machine but records its
+    result here, beside the data it describes, because the record has to
+    outlive the command that produced it (ADR 0019).
+    """
+    _run_ok(target, f"sudo mkdir -p {STAGING_DIR}")
+    _write_remote_file(target, VERIFY_RECORD, record.to_json() + "\n", mode="0600")
 
 
 def read_verification_record(target: Host) -> VerificationRecord | None:
