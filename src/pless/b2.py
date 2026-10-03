@@ -52,7 +52,16 @@ MACHINE_KEY_CAPABILITIES = (
 # credential withholds it from everything the credential can create.
 FORBIDDEN_IN_PROVISIONING_KEY = ("bypassGovernance",)
 
-REQUIRED_IN_PROVISIONING_KEY = ("writeBuckets", "writeBucketRetentions", "writeKeys")
+# Creating a bucket, setting its retention, and minting a key — plus listing
+# keys, which B2 treats as a capability of its own. A credential with
+# `writeKeys` alone can mint a key and not see one, and a verification run
+# found that out with an HTTP 401 after the bucket already existed.
+REQUIRED_IN_PROVISIONING_KEY = (
+    "listKeys",
+    "writeBucketRetentions",
+    "writeBuckets",
+    "writeKeys",
+)
 
 MACHINE_KEY_NAME = "pless-machine"
 PROVISIONING_KEY_NAME = "pless-provisioning"
@@ -454,6 +463,11 @@ def render_api_error(status: int, payload: dict | None, body: str = "") -> str:
     if payload:
         code = str(payload.get("code") or "")
         message = str(payload.get("message") or "")
+        if code and not message:
+            # B2 answers some refusals with a code and nothing else, and a
+            # message that trails off after a colon tells the operator less
+            # than the code alone would.
+            return f"Backblaze refused the request (HTTP {status}) with the code {code!r}."
         if code or message:
             return f"Backblaze refused the request (HTTP {status}, {code or 'no code'}): {message}"
     if body.strip():
@@ -515,6 +529,14 @@ def _call(
     """One API call that must succeed, so the orchestration reads as a sequence."""
     url = f"{auth.api_url.rstrip('/')}/b2api/{API_VERSION}/{endpoint}"
     status, payload = transport("POST", url, body, auth.token)
+    if status in (401, 403):
+        # The credential authorised fine, so a refusal on a single call is
+        # almost always a capability it does not hold for that operation —
+        # which is otherwise a very quiet thing to debug.
+        raise B2Error(
+            f"{render_api_error(status, payload)} The credential authorised, so this is most "
+            f"likely a capability it does not hold for {endpoint}."
+        )
     if not 200 <= status < 300:
         raise B2Error(render_api_error(status, payload))
     return payload

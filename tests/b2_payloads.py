@@ -20,10 +20,15 @@ AUTHORIZE_V3 = {
             "apiUrl": "https://api003.backblazeb2.com",
             "bucketId": None,
             "bucketName": None,
+            # A correctly minted provisioning key. The first run of this
+            # against a real account lacked `listKeys`, which B2 treats as
+            # separate from `writeKeys` — the resulting 401 arrived after the
+            # bucket had been created, and is why the list is what it is.
             "capabilities": [
                 "deleteFiles",
                 "listBuckets",
                 "listFiles",
+                "listKeys",
                 "readBucketRetentions",
                 "readFiles",
                 "writeBucketRetentions",
