@@ -346,12 +346,13 @@ find them all at once, weeks after they were written.
    to a new `drill.py` to keep `backup` from depending on `deploy` and `vm`. Drilled against an
    S3 repository reachable by both machines, which is the arrangement a real off-site
    repository has; it passed without finding a bug, the first stage that did.
-4. **Audit and escape hatches** — `extract` and `forget` are ✅ implemented and drilled. The
-   B2 credential and bucket findings are specified against measurements but not built, and wait
-   on `pless b2 provision` (#16) so an operator is not handed a CRITICAL they can only fix by
-   hand. `mirror` is blocked on a credential question recorded on #2: `restic copy` reads
-   object-storage credentials from process-wide environment variables, so one invocation cannot
-   reach two providers. The cookbook page is still owed.
+4. **Audit and escape hatches** — ✅ `extract`, `forget` and the B2 credential and bucket
+   findings are implemented. The audit half was verified against a real account: the collection
+   script ran against B2 and `analyse` reported the withheld-lock state correctly for a machine
+   key predating [ADR 0020](../../adr/0020-the-machine-key-can-read-the-lock.md). `mirror` is
+   blocked on a credential question recorded on #2: `restic copy` reads object-storage
+   credentials from process-wide environment variables, so one invocation cannot reach two
+   providers. The cookbook page is still owed.
 
 Stage 1 must not be called done until it has run against a **local** repository on a real VM;
 that is what makes the whole flow testable without a cloud account, and it is why the local
