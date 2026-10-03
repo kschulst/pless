@@ -23,11 +23,18 @@ COMMON_OPTIONS = [
 ]
 
 
+# What `timeout(1)` exits with, so the number is recognisable rather than
+# invented. `ssh` itself uses 255 for its own failures and passes the remote
+# command's status through otherwise, so this cannot collide with either.
+TIMEOUT_EXIT_CODE = 124
+
+
 @dataclass
 class SshResult:
     exit_code: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
     @property
     def ok(self) -> bool:
@@ -46,6 +53,20 @@ def ssh_command(destination: list[str], remote_command: str | None = None) -> li
     return command
 
 
+def _as_text(value: str | bytes | None) -> str:
+    """Whatever partial output a timeout left behind, as a string.
+
+    `TimeoutExpired.stdout` is populated inconsistently — bytes on some paths,
+    text on others, absent on POSIX where `run` does not re-read it — and
+    partial output is often the most diagnostic part of a hang.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
 def run(
     destination: list[str],
     remote_command: str,
@@ -57,13 +78,30 @@ def run(
     `input_text` is sent on stdin, which is how secrets are passed: never in
     argv, where any local user could read them with `ps`.
     """
-    completed = subprocess.run(
-        ssh_command(destination, remote_command),
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        input=input_text,
-    )
+    try:
+        completed = subprocess.run(
+            ssh_command(destination, remote_command),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            input=input_text,
+        )
+    except subprocess.TimeoutExpired as expired:
+        # A target that accepts the connection and then stops answering is the
+        # realistic case — memory pressure, stuck I/O — and letting this
+        # propagate turned every command into a traceback at the moment the
+        # machine was least able to answer for itself. `ConnectTimeout` in
+        # COMMON_OPTIONS bounds the handshake, not the remote command.
+        return SshResult(
+            exit_code=TIMEOUT_EXIT_CODE,
+            stdout=_as_text(expired.stdout),
+            stderr=(
+                f"Timed out after {timeout}s. The connection was accepted but the command "
+                "did not return, which is what a machine under memory pressure or with "
+                "stuck I/O does. Nothing was confirmed either way."
+            ),
+            timed_out=True,
+        )
     return SshResult(
         exit_code=completed.returncode,
         stdout=completed.stdout,
