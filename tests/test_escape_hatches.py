@@ -125,15 +125,42 @@ class TestExtractPlumbing:
         assert "restic restore" not in remote
         assert "--target" not in remote
 
-    def test_leaves_out_thumbnails_and_manifests(
+    def test_leaves_out_thumbnails_and_both_kinds_of_manifest(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Readable files, not half an export that looks re-importable."""
+        """Readable files, not half an export that looks re-importable.
+
+        The export holds a manifest beside each document *and* a top-level pair
+        that indexes the whole thing. A drill found the second pair surviving.
+        """
         recorder = Recorder().install(monkeypatch)
         backup.extract(a_config(), A_HOST, tmp_path)
 
-        assert "--exclude=*-manifest.json" in recorder.tar_argv
-        assert "--exclude=*-thumbnail.webp" in recorder.tar_argv
+        for pattern in (
+            "*-manifest.json",
+            "*-thumbnail.webp",
+            "*/manifest.json",
+            "*/metadata.json",
+        ):
+            assert f"--exclude={pattern}" in recorder.tar_argv
+
+    def test_the_documents_land_in_the_destination_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """restic dump writes absolute paths, so the prefix has to come off.
+
+        Without this the operator gets `<destination>/opt/paperless/export/…`
+        and has to go digging, while the command claims it wrote to the
+        destination.
+        """
+        recorder = Recorder().install(monkeypatch)
+        backup.extract(a_config(), A_HOST, tmp_path)
+
+        assert f"--strip-components={backup.EXPORT_PATH_DEPTH}" in recorder.tar_argv
+
+    def test_the_strip_depth_matches_the_export_path(self) -> None:
+        """Derived from the constant, so renaming the export cannot desync it."""
+        assert backup.EXPORT_DIR.strip("/").count("/") + 1 == backup.EXPORT_PATH_DEPTH
 
     def test_creates_the_destination_and_returns_it(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

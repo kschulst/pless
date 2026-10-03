@@ -26,7 +26,7 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pless import composegen, config, sshexec, storage
 from pless.targets import Host
@@ -55,10 +55,25 @@ VERIFY_TIMER_UNIT = "/etc/systemd/system/pless-backup-verify.timer"
 SNAPSHOT_TAG = "pless"
 
 # What `extract` leaves behind. Thumbnails and manifests are Paperless's
-# bookkeeping, not documents: excluding them is what makes the result a pile
-# of readable files rather than half an export that looks re-importable and
-# is not. Use `restore` for that.
-EXTRACT_EXCLUDES = ("*-manifest.json", "*-thumbnail.webp")
+# bookkeeping, not documents: excluding them is what makes the result a pile of
+# readable files rather than half an export that looks re-importable and is not.
+# Use `restore` for that.
+#
+# The export holds both kinds: a `<document>-manifest.json` beside each file,
+# and a top-level `manifest.json` and `metadata.json` that index the whole
+# thing. A drill found the second pair surviving, which left the result looking
+# like most of an export. Patterns are tar's, where `*` crosses `/`.
+EXTRACT_EXCLUDES = (
+    "*-manifest.json",
+    "*-thumbnail.webp",
+    "*/manifest.json",
+    "*/metadata.json",
+)
+
+# `restic dump --archive tar` writes members at their absolute paths, so an
+# unpack lands the documents under `<destination>/opt/paperless/export/`.
+# Strip that prefix, counted from the constant so it cannot drift from it.
+EXPORT_PATH_DEPTH = len(PurePosixPath(EXPORT_DIR).parts) - 1
 
 # What may be handed to `restic restore`. Everything reaching the target goes
 # through a single-quoted `sh -c`, and the set of legal values is small enough
@@ -927,7 +942,14 @@ def extract(
             stderr=errors,
         )
         unpack = subprocess.run(
-            ["tar", "-x", "-C", str(destination), *excludes],
+            [
+                "tar",
+                "-x",
+                "-C",
+                str(destination),
+                f"--strip-components={EXPORT_PATH_DEPTH}",
+                *excludes,
+            ],
             stdin=stream.stdout,
             capture_output=True,
             text=True,

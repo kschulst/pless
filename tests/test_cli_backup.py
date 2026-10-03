@@ -273,6 +273,51 @@ class TestForgetIsADryRunUntilItIsNot:
         result = invoke(["backup", "forget", "--prune", "--confirm"], user_input=f"{label}\n")
         assert "reclaims nothing" in result.output
 
+    def test_it_says_nothing_about_object_lock_for_a_local_repository(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A drill found this hint firing on a local repo, where prune does reclaim."""
+
+        def local(path=None) -> config.Config:
+            cfg = _configured()
+            cfg.backup.restic_repository = "/srv/restic-drill"
+            return cfg
+
+        monkeypatch.setattr(config, "load_config", local)
+        self._fake_forget(monkeypatch)
+        result = invoke(["backup", "forget", "--prune", "--confirm"], user_input="restic-drill\n")
+
+        assert result.exit_code == 0, result.output
+        assert "Object Lock" not in result.output
+
+
+class TestRemoteOutputReachesTheScreenIntact:
+    def test_square_brackets_in_restic_output_are_not_eaten_as_markup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """restic prints `filtered by []`, and brackets are rich's markup syntax."""
+        monkeypatch.setattr(
+            backup,
+            "forget",
+            lambda cfg, target, dry_run=True: "snapshots filtered by [] for host [arkiv-01]",
+        )
+        result = invoke(["backup", "forget"])
+
+        assert result.exit_code == 0, result.output
+        assert "filtered by []" in result.output
+        assert "[arkiv-01]" in result.output
+
+    def test_an_aligned_table_is_not_rewrapped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        table = (
+            "ID        Time                 Tags\n"
+            + "-" * 110
+            + "\nf8084605  2026-10-03 17:44:05  pless"
+        )
+        monkeypatch.setattr(backup, "forget", lambda cfg, target, dry_run=True: table)
+        result = invoke(["backup", "forget"])
+
+        assert "f8084605  2026-10-03 17:44:05  pless" in result.output
+
 
 class TestTheFakes:
     @pytest.mark.parametrize(
