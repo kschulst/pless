@@ -345,8 +345,12 @@ find them all at once, weeks after they were written.
    to a new `drill.py` to keep `backup` from depending on `deploy` and `vm`. Drilled against an
    S3 repository reachable by both machines, which is the arrangement a real off-site
    repository has; it passed without finding a bug, the first stage that did.
-4. **Audit and escape hatches** — the B2 credential and bucket findings, `extract`, `mirror`,
-   `forget`, and the cookbook page.
+4. **Audit and escape hatches** — `extract` and `forget` are ✅ implemented and drilled. The
+   B2 credential and bucket findings are specified against measurements but not built, and wait
+   on `pless b2 provision` (#16) so an operator is not handed a CRITICAL they can only fix by
+   hand. `mirror` is blocked on a credential question recorded on #2: `restic copy` reads
+   object-storage credentials from process-wide environment variables, so one invocation cannot
+   reach two providers. The cookbook page is still owed.
 
 Stage 1 must not be called done until it has run against a **local** repository on a real VM;
 that is what makes the whole flow testable without a cloud account, and it is why the local
@@ -550,30 +554,83 @@ repository kind is a first-class citizen rather than a test fixture.
 
 ### Update exposure audit — `audit.py`
 
+!!! note "Rewritten during Stage 4"
+
+    This section was written before [ADR 0017](../../adr/0017-tamper-resistance-in-the-bucket.md)
+    settled how tamper resistance actually works, and it specified a check that cannot be
+    performed as described. Everything below is measured against a real Backblaze account
+    (issues #14 and #16) rather than inferred.
+
+    Three things changed. The repository is addressed through B2's **S3 endpoint**, not the
+    native `b2:` backend, so the condition "for `b2:` repositories" would never fire. The
+    machine key needs
+    [`readBucketRetentions`](../../adr/0020-the-machine-key-can-read-the-lock.md) or B2 withholds
+    the lock configuration entirely. And the retention **period is an object**, not a number of
+    days.
+
 1. Extend `COLLECT_SCRIPT` with a `##BACKUP` section that:
-   - prints whether `restic` is installed and whether the timers are enabled;
+   - prints whether `restic` is installed and whether both timers are enabled;
    - prints the configured repository scheme (not the full location, which may name a bucket);
-   - for `b2:` repositories, sources `/opt/paperless/backup.env` and calls B2's
+   - when `/opt/paperless/backup.env` holds object-storage credentials, sources it and calls
      `b2_authorize_account` and `b2_list_buckets` with `curl`, emitting the raw JSON. Credentials
      reach `curl` through the environment file, never through argv.
-2. `parse_credential_capability(json_text: str) -> CredentialCapability`: pure.
+   - The condition is the presence of credentials, **not** the repository scheme. ADR 0017
+     requires the S3 endpoint, so the scheme is `s3:` while the credentials are still a B2 key —
+     `render_backup_env` emits them as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and B2's
+     own API accepts the same pair.
+2. `parse_credential_capability(json_text: str) -> CredentialCapability`: pure. Reads
+   `apiInfo.storageApi` — `bucketName`, `capabilities` — and the top-level
+   `applicationKeyExpirationTimestamp`.
 3. `check_backup_credential(capability: CredentialCapability) -> Finding`:
    - CRITICAL when the key is not restricted to a single bucket, or holds any of
      `writeBuckets`, `deleteBuckets`, `writeBucketRetentions`, `writeKeys`, `deleteKeys` — those
      let a compromised machine reconfigure the bucket itself — and above all `bypassGovernance`,
      which defeats Object Lock outright and is what a key created in B2's web console actually
      carries.
+   - CRITICAL when `readBucketRetentions` is **missing**, because then the bucket check below
+     cannot run at all and the operator is trusting Object Lock rather than checking it
+     ([ADR 0020](../../adr/0020-the-machine-key-can-read-the-lock.md)). The finding says the key
+     was minted without it and that `pless b2 provision` mints one correctly.
+   - WARNING when `applicationKeyExpirationTimestamp` is set, naming the date. B2 keys may carry
+     an expiry, and an expired machine key makes backups fail on a day nobody chose — silently,
+     because a timer failing is quiet.
    - OK otherwise, stating the bucket name and that the key cannot change bucket settings.
 4. `check_bucket_protection(protection: BucketProtection, required_days: int) -> Finding`:
-   - CRITICAL when the bucket has no Object Lock default retention, or when the period is shorter
-     than `version_retention_days`.
+   Five outcomes, because B2 distinguishes five states and conflating any two of them produces a
+   check that is either useless or dangerous:
+
+   | `fileLockConfiguration` | Finding |
+   |---|---|
+   | `isClientAuthorizedToRead: false` | CRITICAL — the key cannot see the lock, so nothing here is verified. Points at the credential finding above rather than guessing |
+   | `isFileLockEnabled: false` | CRITICAL — no Object Lock. Versions can be destroyed permanently |
+   | enabled, `defaultRetention.mode: null` | CRITICAL — **lock on, nothing retained.** Objects written carry no protection at all |
+   | `mode: "compliance"` | WARNING — it protects, and binds the operator as much as an attacker. Not a pass, and not a repair either: `provision` refuses such a bucket |
+   | `mode: "governance"` with a period | compare against `version_retention_days` — CRITICAL when shorter, OK when not |
+
+   - The third row is the dangerous one. It is what every bucket looks like between
+     `b2_create_bucket` and the call that sets retention, and it is what an operator who enabled
+     Object Lock in the console and stopped there has. A check asking only `isFileLockEnabled`
+     calls it protected.
+   - `defaultRetention.period` is `{"duration": 90, "unit": "days"}`. The unit is read before the
+     duration is compared; assuming days would silently pass a bucket configured in another unit,
+     which is the mistake this check exists to catch.
    - Versioning and lifecycle rules are **not** accepted as evidence — they do not stop explicit
      version deletion, and a check that passed on them would certify a destroyable setup.
 5. `check_backup_locality(repository: str) -> Finding`:
    - WARNING for a local repository, saying in one sentence that it protects against deletion and
      corruption but not against loss of the machine.
-6. `analyse(output: str, cfg: config.Config | None = None) -> AuditReport`: append the new
+6. `check_repository_endpoint(repository: str, s3_api_url: str) -> Finding`:
+   - WARNING when the configured repository does not sit under the account's own
+     `apiInfo.storageApi.s3ApiUrl`. The machine key can read that field, so the audit can confirm
+     the repository names the account it authenticates against rather than one that merely
+     resembles it.
+7. `analyse(output: str, cfg: config.Config | None = None) -> AuditReport`: append the new
    findings; the signature keeps `cfg` optional so existing callers and tests are unaffected.
+
+**Where the check runs.** On the target, inside `pless audit`, which is why
+[ADR 0020](../../adr/0020-the-machine-key-can-read-the-lock.md) adds the capability rather than
+moving the check to the operator's machine. An audit the operator has to remember to run
+somewhere else is one they will not run.
 
 ### Update readiness — `preflight.py` and its call site
 
