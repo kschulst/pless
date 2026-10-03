@@ -183,6 +183,34 @@ class TestPullIsExplanatoryNotFatal:
         assert "pull limit" not in problem
 
 
+class TestJournalMarkersAreNotContent:
+    """A drill found `-- No entries --` being read as the journal's answer,
+    which discarded the fallback and lost the registry explanation with it."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "-- No entries --",
+            "-- No entries --\n",
+            "-- Boot 1a2b3c4d is the last boot --",
+            "",
+            "   ",
+        ],
+    )
+    def test_markers_and_blanks_count_as_nothing(self, text: str) -> None:
+        assert deploy.journal_content(text) == ""
+
+    def test_real_lines_survive_with_the_markers_removed(self) -> None:
+        text = (
+            "-- Logs begin at Sat 2026-10-03 19:44:00 CEST --\n"
+            "Oct 03 19:44:20 host sh[4237]: no space left on device\n"
+            "-- No more entries --"
+        )
+        assert deploy.journal_content(text) == (
+            "Oct 03 19:44:20 host sh[4237]: no space left on device"
+        )
+
+
 class TestStartUnitSaysWhatTheUnitSaid:
     SYSTEMD = "Job for paperless.service failed because the control process exited"
 
@@ -203,6 +231,39 @@ class TestStartUnitSaysWhatTheUnitSaid:
 
         assert "no space left on device" in str(exc.value)
         assert remote.index_of("systemctl start") < remote.index_of("journalctl")
+
+    def test_the_journal_is_scoped_to_the_attempt_that_failed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A unit that has failed before otherwise mixes attempts together."""
+        remote = FakeRemote(
+            {
+                "systemctl start": (1, self.SYSTEMD),
+                "InvocationID": (0, "a1b2c3d4"),
+                "_SYSTEMD_INVOCATION_ID=a1b2c3d4": (0, "this attempt only"),
+                "journalctl -u": (0, "every attempt ever"),
+            }
+        )
+        monkeypatch.setattr(sshexec, "run", remote.run)
+        with pytest.raises(deploy.DeployError) as exc:
+            deploy.start_unit(A_HOST, "paperless.service")
+
+        assert "this attempt only" in str(exc.value)
+        assert "every attempt ever" not in str(exc.value)
+
+    def test_it_falls_back_to_the_line_count_without_an_invocation_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        remote = FakeRemote(
+            {
+                "systemctl start": (1, self.SYSTEMD),
+                "InvocationID": (0, ""),
+                "journalctl -u": (0, "the last twenty lines"),
+            }
+        )
+        monkeypatch.setattr(sshexec, "run", remote.run)
+        with pytest.raises(deploy.DeployError, match="the last twenty lines"):
+            deploy.start_unit(A_HOST, "paperless.service")
 
     def test_a_registry_refusal_in_the_journal_is_named_as_one(
         self, monkeypatch: pytest.MonkeyPatch
@@ -260,3 +321,25 @@ class TestInstallFetchesBeforeItStarts:
         deploy.install(_cfg(), secrets, A_HOST)
 
         assert remote.index_of("docker compose pull") < remote.index_of("systemctl start")
+
+
+class TestTheFallbackSurvivesAnEmptyInvocationJournal:
+    def test_a_no_entries_answer_does_not_discard_the_explanation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly what the drill hit: scoped journal empty, registry note lost."""
+        remote = FakeRemote(
+            {
+                "systemctl start": (1, "Job for x failed because the control process exited"),
+                "InvocationID": (0, "a1b2c3d4"),
+                "_SYSTEMD_INVOCATION_ID=a1b2c3d4": (0, "-- No entries --"),
+                "journalctl -u": (0, "sh[4250]: unauthorized: authentication required"),
+            }
+        )
+        monkeypatch.setattr(sshexec, "run", remote.run)
+        with pytest.raises(deploy.DeployError) as exc:
+            deploy.start_unit(A_HOST, "paperless.service")
+
+        message = str(exc.value)
+        assert "pull limit" in message, "the registry explanation was lost"
+        assert "-- No entries --" not in message
