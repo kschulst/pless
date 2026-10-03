@@ -232,8 +232,9 @@ it wakes.
 runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--keep-weekly`,
 `--keep-monthly` and `--keep-yearly`.
 
-**`version_retention_days`** is what the bucket's Object Lock default retention is expected to
-be. `pless` does not set it — a key that could would be a key that could remove it. It is used
+**`version_retention_days`** is the bucket's Object Lock default retention. `pless b2
+provision` sets it as a governance period from this value; the machine key cannot change it
+afterwards, because a key that could would be a key that could remove it. It is also used
 to explain why `pless backup forget --prune` may reclaim nothing: under Object Lock the data
 stays until the window expires.
 
@@ -254,6 +255,10 @@ Object Lock" from "not allowed to look".
       settable only through `b2_update_bucket`.
     - A console key with "Read and Write" comes back with **all 29 capabilities**, including
       `bypassGovernance`, which defeats Object Lock entirely.
+
+    **`pless b2 provision --bucket <name>` does both halves correctly**, and refuses a
+    credential that could produce an unsafe key at all. See
+    [Commands](commands.md) for what it does and what it refuses.
 
     See [Secrets](secrets.md) for the capabilities a machine key must and must not have, and
     [ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)

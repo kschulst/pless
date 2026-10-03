@@ -19,9 +19,10 @@ process going wrong.
 
 What you gain is uptime and no hardware to maintain. What you give up is that the machine is
 someone else's, subject to their terms and their account suspension policies. That is also
-precisely why the planned off-site backup targets Backblaze B2 rather than Hetzner's own
-object storage — a backup that shares a blast radius with the thing it protects is not much
-of a backup.
+precisely why the off-site backup targets Backblaze B2 rather than Hetzner's own object
+storage — a backup that shares a blast radius with the thing it protects is not much of a
+backup. `pless b2 provision` sets that bucket up, and the key it mints cannot destroy
+history even if this machine is taken.
 
 ## Set up
 
