@@ -102,6 +102,78 @@ class TestTheCredentialIsNeverInArgv:
         assert APPLICATION_KEY not in result.output
 
 
+class TestCredentialInputWithoutATerminal:
+    """`getpass` needs a controlling terminal to turn echo off. Without one it
+    raises EOFError, which is how a script, CI or a web wizard would have seen
+    this command fail — a traceback instead of a message."""
+
+    def test_a_piped_credential_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[b2.ProvisioningCredential] = []
+
+        def provision(credential, bucket_name, retention_days, transport, **kwargs):
+            seen.append(credential)
+            return an_outcome()
+
+        monkeypatch.setattr(b2, "provision", provision)
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        assert result.exit_code == 0, result.output
+        assert (seen[0].key_id, seen[0].application_key) == (KEY_ID, APPLICATION_KEY)
+
+    def test_blank_lines_are_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[b2.ProvisioningCredential] = []
+        monkeypatch.setattr(
+            b2,
+            "provision",
+            lambda credential, bucket_name, retention_days, transport, **kwargs: (
+                seen.append(credential) or an_outcome()
+            ),
+        )
+        invoke(
+            ["b2", "provision", "--bucket", "pless-archive"], f"\n{KEY_ID}\n\n{APPLICATION_KEY}\n"
+        )
+
+        assert seen[0].key_id == KEY_ID
+
+    def test_an_empty_stdin_is_a_message_not_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            b2,
+            "provision",
+            lambda credential, bucket_name, retention_days, transport, **kwargs: an_outcome(),
+        )
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], "")
+
+        assert result.exit_code != 0
+        assert "did not carry a credential" in result.output
+        assert "Traceback" not in result.output
+
+    def test_one_line_only_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            b2,
+            "provision",
+            lambda credential, bucket_name, retention_days, transport, **kwargs: an_outcome(),
+        )
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], f"{KEY_ID}\n")
+
+        assert result.exit_code != 0
+        assert "two lines" in result.output
+
+    def test_the_refusal_does_not_offer_an_argv_alternative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Suggesting a flag would undo ADR 0014 in a help message."""
+        monkeypatch.setattr(
+            b2,
+            "provision",
+            lambda credential, bucket_name, retention_days, transport, **kwargs: an_outcome(),
+        )
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], "")
+
+        assert "readable by any local user" in result.output
+
+
 class TestWhatItPrintsOnSuccess:
     @pytest.fixture(autouse=True)
     def _succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:

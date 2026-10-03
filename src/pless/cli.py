@@ -359,6 +359,35 @@ def docs_estimate(
             )
 
 
+class _NoCredentialInput(RuntimeError):
+    pass
+
+
+def _read_credential_pair(id_prompt: str, secret_prompt: str) -> tuple[str, str]:
+    """Two credential halves, prompted on a terminal and piped otherwise.
+
+    `typer.prompt(hide_input=True)` reaches for `getpass`, which needs a
+    controlling terminal to turn echo off. Without one it raises `EOFError`,
+    which is how a script, CI, or a future web wizard would see this command
+    fail — a traceback instead of a message, which is the shape of bug #13 and
+    #19 were about.
+
+    So a pipe is a supported way in: two lines, id then secret. Neither ever
+    reaches argv, which is the property that matters (ADR 0014).
+    """
+    if sys.stdin is not None and sys.stdin.isatty():
+        return typer.prompt(id_prompt), typer.prompt(secret_prompt, hide_input=True)
+
+    lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+    if len(lines) < 2:
+        raise _NoCredentialInput(
+            "No terminal to prompt on, and stdin did not carry a credential. Pipe two "
+            "lines — the keyID, then the applicationKey — or run this from a terminal. "
+            "Passing them as arguments is not offered: argv is readable by any local user."
+        )
+    return lines[0], lines[1]
+
+
 def _print_verbatim(text: str) -> None:
     """Print text exactly as it is, without rich reinterpreting it.
 
@@ -901,10 +930,15 @@ def b2_provision(
         "\\[backup], not .env, not argv."
     )
 
-    # Prompted, never an option: anything in argv is readable by any local user
-    # through `ps`, and this credential can create buckets and mint keys.
-    key_id = typer.prompt("Provisioning keyID")
-    application_key = typer.prompt("Provisioning applicationKey", hide_input=True)
+    # Never an option: anything in argv is readable by any local user through
+    # `ps`, and this credential can create buckets and mint keys.
+    try:
+        key_id, application_key = _read_credential_pair(
+            "Provisioning keyID", "Provisioning applicationKey"
+        )
+    except _NoCredentialInput as exc:
+        _fail(str(exc))
+        return
 
     try:
         outcome = b2.provision(
