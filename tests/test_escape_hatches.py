@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from ssh_doubles import FakeSsh
 
 from pless import backup, config, sshexec
 from pless.targets import Host
@@ -244,3 +245,156 @@ class TestForget:
         cfg.backup.retention_daily = 30
         backup.forget(cfg, A_HOST)
         assert "--keep-daily 30" in seen[0]
+
+
+class TestResticVersion:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("restic 0.17.3 compiled with go1.23.1 on linux/arm64", (0, 17, 3)),
+            ("restic 0.16.4 compiled with go1.22.2 on linux/amd64", (0, 16, 4)),
+            ("restic 0.14.0", (0, 14, 0)),
+            ("restic 1.0", (1, 0, 0)),
+        ],
+    )
+    def test_the_version_is_read_not_guessed(self, text: str, expected: tuple) -> None:
+        assert backup.parse_restic_version(text) == expected
+
+    @pytest.mark.parametrize("text", ["", "command not found", "0.17.3"])
+    def test_an_unreadable_version_refuses_rather_than_assuming(self, text: str) -> None:
+        """Guessing would mean guessing which way round `restic copy` goes."""
+        with pytest.raises(backup.BackupError, match="Refusing to guess"):
+            backup.parse_restic_version(text)
+
+
+class TestMirrorRefusals:
+    def _answers(self, version: str = "restic 0.17.3") -> dict:
+        return {"restic version": (0, version)}
+
+    def test_an_unconfigured_repository_has_nothing_to_mirror(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeSsh()
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        with pytest.raises(backup.BackupError, match="no repository to mirror"):
+            backup.mirror(a_config(""), A_HOST, "/mnt/mirror")
+        assert fake.commands == []
+
+    @pytest.mark.parametrize(
+        "destination",
+        ["'; rm -rf / #", "/mnt/with space", "$(id)", "a`id`b", "", "sftp:host:/p;ls"],
+    )
+    def test_a_destination_it_will_not_pass_to_restic_is_refused(
+        self, destination: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Validated rather than quoted, like a snapshot id."""
+        fake = FakeSsh()
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        with pytest.raises(backup.BackupError, match="not a repository location"):
+            backup.mirror(a_config(), A_HOST, destination)
+        assert fake.commands == [], "it reached the machine before validating"
+
+    @pytest.mark.parametrize(
+        "destination",
+        [
+            "/mnt/backup/mirror",
+            "sftp:deploy@elsewhere:/srv/mirror",
+            "s3:https://s3.example.com/mirror",
+            "rclone:dropbox:paperless",
+        ],
+    )
+    def test_every_repository_form_restic_takes_is_accepted(
+        self, destination: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = FakeSsh({"restic version": (0, "restic 0.17.3")})
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        backup.mirror(a_config(), A_HOST, destination)
+        assert fake.ran("restic copy")
+
+    def test_mirroring_a_repository_into_itself_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cfg = a_config()
+        fake = FakeSsh()
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        with pytest.raises(backup.BackupError, match="into itself"):
+            backup.mirror(cfg, A_HOST, cfg.backup.restic_repository)
+
+    def test_restic_older_than_the_direction_change_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Before 0.14 the arguments meant the opposite, and both forms exit zero."""
+        fake = FakeSsh({"restic version": (0, "restic 0.13.1")})
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        with pytest.raises(backup.BackupError, match="other way round"):
+            backup.mirror(a_config(), A_HOST, "/mnt/mirror")
+        assert not fake.ran("restic copy"), "it copied with an ambiguous direction"
+
+
+class TestMirrorDirection:
+    """Both directions exit zero, so getting it backwards copies the mirror into
+    the archive and reports success. This is the test that catches that."""
+
+    def _mirror(self, monkeypatch: pytest.MonkeyPatch, destination: str) -> FakeSsh:
+        fake = FakeSsh({"restic version": (0, "restic 0.17.3")})
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        backup.mirror(a_config(), A_HOST, destination)
+        return fake
+
+    def test_the_destination_is_the_repository_and_the_source_is_from(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        copy = fake.commands[fake.index_of("restic copy")]
+
+        assert "RESTIC_REPOSITORY=/mnt/mirror" in copy
+        assert 'RESTIC_FROM_REPOSITORY="$SRC"' in copy
+
+    def test_the_source_is_captured_before_anything_reassigns_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Reading it from the same command prefix that sets the destination
+        would rely on assignments in a prefix not seeing one another."""
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        copy = fake.commands[fake.index_of("restic copy")]
+
+        assert copy.index('SRC="$RESTIC_REPOSITORY"') < copy.index("RESTIC_REPOSITORY=/mnt/mirror")
+
+    def test_both_repositories_use_the_same_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One secret opens both, so the archive restores from either."""
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        copy = fake.commands[fake.index_of("restic copy")]
+
+        assert 'RESTIC_PASSWORD="$PW"' in copy
+        assert 'RESTIC_FROM_PASSWORD="$PW"' in copy
+
+    def test_only_pless_snapshots_are_copied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        assert f"--tag {backup.SNAPSHOT_TAG}" in fake.commands[fake.index_of("restic copy")]
+
+    def test_nothing_is_decrypted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`copy` moves packs between repositories; `dump` and `restore` do not."""
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        joined = " ".join(fake.commands)
+
+        assert "restic dump" not in joined
+        assert "restic restore" not in joined
+
+    def test_a_fresh_destination_is_initialised_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`restic copy` needs it to exist, and failing there would be a
+        confusing place to stop."""
+        fake = FakeSsh(
+            {"restic version": (0, "restic 0.17.3"), "restic cat config": (1, "no repository")}
+        )
+        monkeypatch.setattr(sshexec, "run", fake.run)
+        backup.mirror(a_config(), A_HOST, "/mnt/mirror")
+
+        assert fake.index_of("restic init") < fake.index_of("restic copy")
+
+    def test_an_existing_destination_is_not_reinitialised(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake = self._mirror(monkeypatch, "/mnt/mirror")
+        assert not fake.ran("restic init")

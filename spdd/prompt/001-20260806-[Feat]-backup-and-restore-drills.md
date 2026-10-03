@@ -346,13 +346,15 @@ find them all at once, weeks after they were written.
    to a new `drill.py` to keep `backup` from depending on `deploy` and `vm`. Drilled against an
    S3 repository reachable by both machines, which is the arrangement a real off-site
    repository has; it passed without finding a bug, the first stage that did.
-4. **Audit and escape hatches** — ✅ `extract`, `forget` and the B2 credential and bucket
-   findings are implemented. The audit half was verified against a real account: the collection
-   script ran against B2 and `analyse` reported the withheld-lock state correctly for a machine
-   key predating [ADR 0020](../../adr/0020-the-machine-key-can-read-the-lock.md). `mirror` is
-   blocked on a credential question recorded on #2: `restic copy` reads object-storage
-   credentials from process-wide environment variables, so one invocation cannot reach two
-   providers. The cookbook page is still owed.
+4. **Audit and escape hatches** — ✅ complete. `extract`, `forget`, `mirror`, the B2 credential
+   and bucket findings, and the cookbook page. The audit half was verified against a real
+   account: the collection script ran against B2 and `analyse` reported the withheld-lock state
+   correctly for a machine key predating
+   [ADR 0020](../../adr/0020-the-machine-key-can-read-the-lock.md).
+
+All four stages are delivered. What the canvas does not cover, and #2 should carry forward: no
+drill has run `mirror` against a real second repository, and nothing here has touched real
+Raspberry Pi hardware (#4).
 
 Stage 1 must not be called done until it has run against a **local** repository on a real VM;
 that is what makes the whole flow testable without a cloud account, and it is why the local
@@ -542,9 +544,34 @@ repository kind is a first-class citizen rather than a test fixture.
    - Restore only the originals to a local directory over SSH, defaulting to
      `cfg.paths.backups` (`./backups`).
    - The caller must have confirmed: this writes readable documents to an unencrypted disk.
-3. `mirror(cfg, target, destination_repository: str) -> None`:
-   - `restic copy --repo2` (or `--from-repo`, matching the installed restic version) so the copy
-     stays encrypted end to end. Never decrypts.
+3. `mirror(cfg, target, destination_repository: str) -> str`:
+   - `restic copy` so the copy stays encrypted end to end. Never decrypts.
+
+   !!! note "Settled during Stage 4"
+
+       **Only the modern invocation, and a refusal below restic 0.14.** This section said
+       "matching the installed restic version", which would have meant two code paths — and
+       `restic copy` *reversed its argument direction* at 0.14. Before: `-r SRC copy --repo2
+       DEST`. After: `-r DEST copy --from-repo SRC`. Same two repositories, opposite roles, and
+       both forms exit zero, so getting it backwards copies the mirror into the main repository
+       and reports success.
+
+       Both distributions this project supports ship restic well past 0.14 — Debian 13 carries
+       0.17, Ubuntu 24.04 carries 0.16 ([ADR 0011](../../adr/0011-debian-and-ubuntu-as-equals.md))
+       — so the legacy path would have been untestable dead code guarding a trap. Refusing
+       below 0.14 leaves exactly one invocation, which removes the trap rather than navigating
+       it.
+
+       **Different credentials for the two repositories are out of scope, because restic cannot
+       do it.** Its own documentation says the backend configuration "may apply to both
+       repositories", and recommends the rclone backend instead. So `mirror` passes the
+       destination through as the opaque string it already is: a local path, an sftp
+       destination, another bucket under the same key, or an rclone remote for a genuinely
+       different provider. No credential model, and no new configuration.
+
+       **The destination uses the same `RESTIC_PASSWORD`.** One secret opens both, so the
+       archive can be restored from either. A second password would be a second secret with no
+       recovery path, and a mirror that needs a secret you do not have is not a mirror.
 4. `forget(cfg, target, dry_run: bool = True) -> str` — runs on the target against the key
    already there. Nothing about where retention runs changes the exposure, since the machine's
    key can delete versions regardless

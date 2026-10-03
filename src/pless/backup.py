@@ -80,6 +80,19 @@ EXPORT_PATH_DEPTH = len(PurePosixPath(EXPORT_DIR).parts) - 1
 # that refusing the rest is clearer than quoting around it.
 SNAPSHOT_ID_PATTERN = re.compile(r"^(latest|[0-9a-f]{8,64})$", re.IGNORECASE)
 
+# A mirror destination reaches restic inside a single-quoted `sh -c`, same as
+# a snapshot id. Validated rather than quoted: this covers every repository
+# form restic takes — a path, an sftp or s3 URL, an rclone remote — and
+# excludes quotes, spaces, `$` and `;`, so there is nothing to escape.
+REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9./][A-Za-z0-9._:/@+-]*$")
+
+# `restic copy` reversed its argument direction here: before 0.14 the source
+# was `-r` and the destination `--repo2`, after it is the other way round.
+# Both forms exit zero, so a mistake copies the mirror into the archive and
+# reports success. Supporting only one side of that removes the trap instead
+# of navigating it, and every distribution this project supports is past it.
+MINIMUM_COPY_VERSION = (0, 14, 0)
+
 # A locked volume is the normal state after a reboot, not a failure. The script
 # exits with this, and the unit treats it as success, so a routine skip never
 # trains the operator to ignore backup alerts.
@@ -969,6 +982,104 @@ def extract(
     if unpack.returncode != 0:
         raise BackupError(f"Unpacking into {destination} failed: {unpack.stderr.strip()}")
     return destination
+
+
+def parse_restic_version(text: str) -> tuple[int, int, int]:
+    """`restic 0.17.3 compiled with go1.23.1 on linux/arm64` -> (0, 17, 3). Pure."""
+    match = re.search(r"restic\s+(\d+)\.(\d+)(?:\.(\d+))?", text)
+    if not match:
+        raise BackupError(
+            f"Could not read a version out of {text.strip()[:80]!r}. Refusing to guess which "
+            "way round `restic copy` wants its arguments."
+        )
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+
+
+def restic_version(target: Host) -> tuple[int, int, int]:
+    return parse_restic_version(_run_ok(target, "restic version"))
+
+
+def mirror(
+    cfg: config.Config,
+    target: Host,
+    destination_repository: str,
+    timeout: int = 21600,
+) -> str:
+    """Copy the repository somewhere else, still encrypted the whole way.
+
+    The answer to "what if the Backblaze account is lost", which Object Lock
+    does not cover: a lock protects history from a compromised machine, not
+    from an account suspension.
+
+    Nothing is decrypted. `restic copy` moves packs between repositories, and
+    the destination uses the same `RESTIC_PASSWORD` as the source — one secret
+    opens both, so the archive can be restored from either. A second password
+    would be a second secret with no recovery path, and a mirror that needs a
+    secret you do not have is not a mirror.
+
+    Different *credentials* for the two are out of scope because restic cannot
+    do it: its own documentation says the backend configuration may apply to
+    both repositories, and recommends the rclone backend instead. So the
+    destination is whatever restic can already reach — a path, an sftp
+    destination, another bucket under the same key, or an rclone remote.
+    """
+    if not cfg.backup.is_configured:
+        raise BackupError(
+            "[backup] restic_repository is empty, so there is no repository to mirror."
+        )
+    if not REPOSITORY_PATTERN.match(destination_repository):
+        raise BackupError(
+            f"{destination_repository!r} is not a repository location pless will pass to "
+            "restic. Letters, digits and `. _ : / @ + -` only — a location containing a "
+            "space or a shell character is refused rather than quoted around."
+        )
+    if destination_repository == cfg.backup.restic_repository:
+        raise BackupError(
+            "The destination is the repository being mirrored. Copying a repository into "
+            "itself does nothing useful and is not obviously harmless, so pless refuses it."
+        )
+
+    version = restic_version(target)
+    if version < MINIMUM_COPY_VERSION:
+        major, minor, patch = version
+        raise BackupError(
+            f"restic {major}.{minor}.{patch} is installed, and `restic copy` took its source "
+            "and destination the other way round before 0.14 — with both forms exiting zero, "
+            "so a mistake would copy the mirror into the archive and report success. pless "
+            "will not guess. Upgrade restic to 0.14 or later."
+        )
+
+    # The source is captured into SRC before anything reassigns
+    # RESTIC_REPOSITORY. Reading the source from the same command prefix that
+    # sets the destination would rely on assignments in a prefix not seeing one
+    # another — true in POSIX, and far too subtle a thing to rest the direction
+    # of a copy on, given that both directions exit zero.
+    prelude = f'. {ENV_FILE} && SRC="$RESTIC_REPOSITORY" && PW="$RESTIC_PASSWORD"'
+    destination = f'RESTIC_REPOSITORY={destination_repository} RESTIC_PASSWORD="$PW"'
+
+    # `restic copy` needs the destination to exist, and a fresh one does not.
+    # Failing there would be a confusing place to stop.
+    existing = _run(
+        target,
+        f"sudo sh -c '{prelude} && {destination} restic cat config > /dev/null 2>&1'",
+    )
+    if not existing.ok:
+        _run_ok(
+            target,
+            f"sudo sh -c '{prelude} && {destination} restic init'",
+            timeout=600,
+        )
+
+    # One invocation, the post-0.14 one: the destination is the repository, the
+    # source is `--from-repo`. Both passwords are the same value under two
+    # names, which is what lets a single secret open both repositories.
+    return _run_ok(
+        target,
+        f"sudo sh -c '{prelude} && {destination} "
+        'RESTIC_FROM_REPOSITORY="$SRC" RESTIC_FROM_PASSWORD="$PW" '
+        f"restic copy --tag {SNAPSHOT_TAG}'",
+        timeout=timeout,
+    )
 
 
 def forget(cfg: config.Config, target: Host, dry_run: bool = True) -> str:
