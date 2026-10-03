@@ -90,10 +90,44 @@ def pull(target: Host, timeout: int = 1800) -> str:
     return f"Fetching the images did not complete: {detail}"
 
 
+def journal_content(text: str) -> str:
+    """The journal's real lines, with its own markers stripped. Pure.
+
+    `journalctl` answers `-- No entries --` and exits zero, and prints boot
+    markers the same way. Treating that as content once cost the registry
+    recognition below: the marker matched no failure shape, so the useful
+    fallback was discarded and the operator lost the explanation. Silence
+    arriving as a successful-looking string is exactly the trap this codebase
+    keeps finding.
+    """
+    kept = [
+        line
+        for line in text.strip().splitlines()
+        if line.strip() and not (line.strip().startswith("--") and line.strip().endswith("--"))
+    ]
+    return "\n".join(kept).strip()
+
+
 def unit_journal(target: Host, unit: str, lines: int = 20) -> str:
-    """The unit's own last words, for when systemd only offers its summary."""
-    result = _run(target, f"sudo journalctl -u {shlex.quote(unit)} --no-pager -n {lines}")
-    return result.stdout.strip() if result.ok else ""
+    """The unit's own last words, for when systemd only offers its summary.
+
+    Scoped to the attempt that just failed. `journalctl -n` returns the last
+    lines whatever run produced them, so a unit that has failed before hands
+    back a mixture of attempts — and a drill showed how easily an hour-old line
+    reads as a fresh one. systemd's invocation id identifies this start
+    exactly; where it is unavailable, the line count is the fallback.
+    """
+    quoted = shlex.quote(unit)
+    invocation = _run(target, f"systemctl show -p InvocationID --value {quoted}")
+    identifier = invocation.stdout.strip() if invocation.ok else ""
+    if identifier:
+        scoped = _run(
+            target, f"sudo journalctl _SYSTEMD_INVOCATION_ID={shlex.quote(identifier)} --no-pager"
+        )
+        if scoped.ok and journal_content(scoped.stdout):
+            return journal_content(scoped.stdout)
+    result = _run(target, f"sudo journalctl -u {quoted} --no-pager -n {lines}")
+    return journal_content(result.stdout) if result.ok else ""
 
 
 def start_unit(target: Host, unit: str, timeout: int = 900, context: str = "") -> None:
