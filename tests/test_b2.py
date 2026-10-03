@@ -199,17 +199,40 @@ class TestRefuseProvisioningCredential:
         assert "bypassGovernance" in message
         assert "withhold what the parent key has" in message
 
-    def test_the_refusal_prints_a_working_call(self) -> None:
-        """Prose with placeholders to substitute is where operators go wrong."""
+    def test_the_refusal_carries_its_remedy_as_data(self) -> None:
+        """Not as message text. Printing it inline came to 51 lines in a real
+        run, and the three sentences that mattered scrolled away above them — so
+        `cli.py` decides the form, and a web interface could too (ADR 0009)."""
         with pytest.raises(b2.B2Error) as exc:
             b2.refuse_provisioning_credential(self._auth([*self.ACCEPTABLE, "bypassGovernance"]))
 
-        message = str(exc.value)
-        assert "b2_create_key" in message
-        assert "acct" in message, "the account id is filled in, not left as a placeholder"
-        # No <ANGLE_BRACKET> placeholders. Checked by shape rather than by
-        # looking for "<", because the heredoc marker legitimately contains one.
-        assert not re.search(r"<[A-Za-z_][\w -]*>", message), "something is left to substitute"
+        assert "b2_create_key" in exc.value.script
+        assert "b2_create_key" not in str(exc.value), "the script leaked into the message"
+        assert len(str(exc.value).splitlines()) <= 2, "the message is readable on its own"
+
+    def test_the_remedy_has_nothing_left_to_substitute(self) -> None:
+        """Prose with placeholders is where operators go wrong."""
+        with pytest.raises(b2.B2Error) as exc:
+            b2.refuse_provisioning_credential(self._auth([*self.ACCEPTABLE, "bypassGovernance"]))
+
+        script = exc.value.script
+        assert "acct" in script, "the account id is filled in, not left as a placeholder"
+        assert not re.search(r"<[A-Za-z_][\w -]*>", script), "something is left to substitute"
+
+    def test_every_credential_refusal_carries_the_remedy(self) -> None:
+        for capabilities in (
+            [*self.ACCEPTABLE, "bypassGovernance"],
+            [c for c in self.ACCEPTABLE if c != "writeKeys"],
+        ):
+            with pytest.raises(b2.B2Error) as exc:
+                b2.refuse_provisioning_credential(self._auth(capabilities))
+            assert exc.value.script, f"no remedy offered for {capabilities}"
+
+        with pytest.raises(b2.B2Error) as exc:
+            b2.refuse_provisioning_credential(
+                self._auth(self.ACCEPTABLE, bucket_id="abc", bucket_name="pless-tesst")
+            )
+        assert exc.value.script
 
     def test_a_bucket_restricted_credential_is_refused_up_front(self) -> None:
         """Failing at b2_create_bucket instead would be late and obscure."""

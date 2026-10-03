@@ -283,6 +283,73 @@ class TestRefusalsReachTheOperator:
         assert result.exit_code != 0
 
 
+class TestARefusalIsOneLineToRun:
+    """A verification run printed 51 lines for one refusal, 36 of them the
+    script, and its three load-bearing sentences scrolled away."""
+
+    def _refusing(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        monkeypatch.setattr(b2, "BOOTSTRAP_SCRIPT_PATH", str(tmp_path / "remedy.py"))
+
+        def refuse(credential, bucket_name, retention_days, transport, **kwargs):
+            raise b2.B2Error(
+                "This credential holds bypassGovernance.",
+                script=b2.bootstrap_key_script("acct"),
+            )
+
+        monkeypatch.setattr(b2, "provision", refuse)
+
+    def test_the_script_is_written_and_one_line_is_printed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._refusing(monkeypatch, tmp_path)
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        written = tmp_path / "remedy.py"
+        assert written.is_file()
+        assert "b2_create_key" in written.read_text()
+        assert f"python3 {written}" in result.output
+
+    def test_the_output_stays_short_enough_to_read(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._refusing(monkeypatch, tmp_path)
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        assert len(result.output.splitlines()) < 20, result.output
+        assert "import base64" not in result.output, "the script was printed, not written"
+
+    def test_the_message_itself_still_reaches_the_operator(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        self._refusing(monkeypatch, tmp_path)
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        assert "bypassGovernance" in result.output
+        assert result.exit_code != 0
+
+    def test_an_unwritable_path_falls_back_to_printing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        """Worse, and still better than losing the remedy entirely."""
+        self._refusing(monkeypatch, tmp_path / "missing-dir")
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        assert result.exit_code != 0
+        assert "b2_create_key" in result.output
+
+    def test_a_refusal_without_a_remedy_is_just_a_message(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(credential, bucket_name, retention_days, transport, **kwargs):
+            raise b2.B2Error("The bucket exists without Object Lock.")
+
+        monkeypatch.setattr(b2, "provision", refuse)
+        result = invoke(["b2", "provision", "--bucket", "pless-archive"], CREDENTIALS)
+
+        assert "without Object Lock" in result.output
+        assert "python3" not in result.output
+
+
 class TestTheBucketIsRequired:
     def test_no_bucket_is_a_usage_error(self) -> None:
         result = invoke(["b2", "provision"], CREDENTIALS)

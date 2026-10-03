@@ -359,6 +359,43 @@ def docs_estimate(
             )
 
 
+def _fail_with_remedy(exc: b2.B2Error) -> None:
+    """Report a refusal, and put its remedy somewhere runnable.
+
+    `b2` raises refusals that carry a script rather than printing one. A
+    verification run showed why: printing it inline came to 51 lines, of which
+    36 were the script, so the three sentences that mattered scrolled away —
+    and twice in one session the wrong thing got run because a long block had
+    to be pasted by hand.
+
+    The script holds no secret; it prompts for the master key and writes
+    nothing. So it is safe on disk, and one line to run beats thirty-six to
+    paste.
+    """
+    if not exc.script:
+        _fail(str(exc))
+        return
+
+    path = Path(b2.BOOTSTRAP_SCRIPT_PATH)
+    try:
+        path.write_text(exc.script, encoding="utf-8")
+    except OSError as write_error:
+        # Falling back to printing it is worse, and still better than nothing.
+        console.print(f"[red]✗[/red] {exc}")
+        console.print(f"[yellow]•[/yellow] Could not write {path}: {write_error}")
+        _print_verbatim(exc.script)
+        raise typer.Exit(code=1) from None
+
+    console.print(f"[red]✗[/red] {exc}")
+    console.print("\n[bold]Run this to mint a credential that works:[/bold]\n")
+    _print_verbatim(f"    python3 {path}")
+    console.print(
+        f"\n[yellow]•[/yellow] It prompts for your Backblaze master key, uses it once, and "
+        f"stores nothing. Delete {path} afterwards."
+    )
+    raise typer.Exit(code=1)
+
+
 class _NoCredentialInput(RuntimeError):
     pass
 
@@ -950,7 +987,7 @@ def b2_provision(
             progress=lambda message: console.print(f"  {message}"),
         )
     except b2.B2Error as exc:
-        _fail(str(exc))
+        _fail_with_remedy(exc)
         return
 
     verb = "Created" if outcome.created_bucket else "Adopted"

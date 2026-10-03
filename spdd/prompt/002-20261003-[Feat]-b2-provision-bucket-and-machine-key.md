@@ -260,6 +260,22 @@ these objects exist only in memory and the leak path is output rather than argv.
    - Converts only from units it recognises, and raises `B2Error` on any other. Assuming days
      would silently pass a bucket configured in another unit, which is the mistake this exists to
      catch.
+!!! note "Amended after verification"
+
+    A refusal carries its remedy as **data**, not as 36 lines of text. `B2Error` has an
+    optional `script` field; the refusals set it, and `cli.py` decides what to do with it —
+    writing it to one named path and printing a single line to run.
+
+    The verification run made the case. The bucket-restricted refusal printed 51 lines, of
+    which 36 were the script, so its three load-bearing sentences scrolled away. And twice in
+    one session the wrong thing was run because a long block had to be pasted by hand, or
+    because two similarly named scripts sat side by side.
+
+    The core module still writes no file — that safeguard holds unchanged. A web interface
+    would render the same `script` field as a download or a copy button
+    ([ADR 0009](../../adr/0009-cli-is-a-library-with-a-terminal-frontend.md)), which printing
+    it from `b2.py` would have made impossible.
+
 6. `refuse_provisioning_credential(auth: Authorization) -> None`:
    - Raises when any of `FORBIDDEN_IN_PROVISIONING_KEY` is present. The message says that B2
      cannot be asked to withhold what the parent key holds, and prints
