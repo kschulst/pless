@@ -17,6 +17,7 @@ from rich.table import Table
 from pless import (
     __version__,
     audit,
+    b2,
     backup,
     bootstrap,
     composegen,
@@ -44,6 +45,10 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 hetzner_app = typer.Typer(help="Hetzner Cloud setup and checks.", no_args_is_help=True)
+b2_app = typer.Typer(
+    help="Backblaze B2 setup. Optional, and only a way to obtain a bucket.",
+    no_args_is_help=True,
+)
 docs_app = typer.Typer(help="Scan and size local documents.", no_args_is_help=True)
 server_app = typer.Typer(help="Target status and operations.", no_args_is_help=True)
 vm_app = typer.Typer(help="Local development VM.", no_args_is_help=True)
@@ -54,6 +59,7 @@ tailscale_app = typer.Typer(help="Tailscale access to the target.", no_args_is_h
 secrets_app = typer.Typer(help="Generate secrets in the documented formats.", no_args_is_help=True)
 backup_app = typer.Typer(help="Back up the archive, and prove it restores.", no_args_is_help=True)
 app.add_typer(hetzner_app, name="hetzner")
+app.add_typer(b2_app, name="b2")
 app.add_typer(docs_app, name="docs")
 app.add_typer(server_app, name="server")
 app.add_typer(vm_app, name="vm")
@@ -353,13 +359,18 @@ def docs_estimate(
             )
 
 
-def _print_remote_output(text: str) -> None:
-    """Print a tool's own output without rich reinterpreting it.
+def _print_verbatim(text: str) -> None:
+    """Print text exactly as it is, without rich reinterpreting it.
 
-    restic prints aligned tables, and rich re-wraps them into nonsense at any
-    narrow terminal. It also writes things like `filtered by []`, and square
-    brackets are rich's markup syntax — so arbitrary remote output can be
-    swallowed, or raise, on its way to the screen.
+    Two things need this. A tool's own output: restic prints aligned tables
+    that rich re-wraps into nonsense at any narrow terminal, and writes things
+    like `filtered by []` where square brackets are rich's markup syntax, so
+    arbitrary remote output can be swallowed or raise on its way to the screen.
+
+    And anything the operator is meant to *copy*. A repository location is
+    longer than eighty columns, and a line break inserted into the middle of
+    one produces a broken paste into `pless.toml`. Both cases were found by a
+    test rather than by reading.
     """
     console.print(text, markup=False, highlight=False, soft_wrap=True)
 
@@ -869,6 +880,78 @@ def paperless_health() -> None:
         _fail(f"Paperless is not answering as expected (HTTP {code}). See `pless deploy logs`.")
 
 
+@b2_app.command("provision")
+def b2_provision(
+    bucket: str = typer.Option(..., "--bucket", help="Bucket name. Globally unique across B2."),
+    new_key: bool = typer.Option(
+        False, "--new-key", help="Mint another machine key even if one already exists."
+    ),
+) -> None:
+    """Create a bucket Object Lock protects, and mint a key restricted to it."""
+    cfg = config.load_config()
+    days = cfg.backup.version_retention_days
+
+    console.print(
+        f"This creates the bucket [bold]{bucket}[/bold] with Object Lock in governance mode, "
+        f"retaining versions for [bold]{days} days[/bold], and mints a machine key restricted "
+        "to it."
+    )
+    console.print(
+        "The provisioning credential is used for the API calls and written nowhere — not "
+        "\[backup], not .env, not argv."
+    )
+
+    # Prompted, never an option: anything in argv is readable by any local user
+    # through `ps`, and this credential can create buckets and mint keys.
+    key_id = typer.prompt("Provisioning keyID")
+    application_key = typer.prompt("Provisioning applicationKey", hide_input=True)
+
+    try:
+        outcome = b2.provision(
+            b2.ProvisioningCredential(key_id=key_id, application_key=application_key),
+            bucket,
+            days,
+            b2.http_transport(),
+            allow_new_key=new_key,
+            progress=lambda message: console.print(f"  {message}"),
+        )
+    except b2.B2Error as exc:
+        _fail(str(exc))
+        return
+
+    verb = "Created" if outcome.created_bucket else "Adopted"
+    headline = f"\n[green]✓[/green] {verb} [bold]{outcome.bucket.bucket_name}[/bold]"
+    period = outcome.bucket.lock.period
+    if period:
+        headline += (
+            f" — Object Lock on, governance mode, {period.duration} {period.unit} of retention."
+        )
+    console.print(headline)
+    if outcome.repaired_retention and not outcome.created_bucket:
+        console.print("[green]✓[/green] The retention was missing or too short, and was set.")
+
+    console.print("\n[bold]Put this in pless.toml, under \[backup]:[/bold]\n")
+    _print_verbatim(f'    restic_repository = "{outcome.repository}"')
+
+    console.print("\n[bold]The machine key — this is the only time it is shown:[/bold]\n")
+    _print_verbatim(f"    B2_KEY_ID={outcome.machine_key.key_id}")
+    _print_verbatim(f"    B2_APPLICATION_KEY={outcome.machine_key.application_key}\n")
+    console.print(
+        "[bold yellow]! Put it in your password manager now. pless keeps no copy, and "
+        "Backblaze will not show it again.[/bold yellow]"
+    )
+    console.print(
+        f"[green]✓[/green] It holds exactly: {', '.join(outcome.machine_key.capabilities)} — "
+        "and not bypassGovernance, which is what stops a compromised machine destroying "
+        "history."
+    )
+
+    for note in outcome.notes:
+        console.print(f"[yellow]•[/yellow] {note}")
+
+    console.print("\nNext: [bold]pless backup init[/bold]")
+
+
 @backup_app.command("init")
 def backup_init() -> None:
     """Write the backup script, unit and timer to the target, and enable them."""
@@ -1114,7 +1197,7 @@ def backup_forget(
         except backup.BackupError as exc:
             _fail(str(exc))
             return
-        _print_remote_output(output or "Nothing matched the retention policy.")
+        _print_verbatim(output or "Nothing matched the retention policy.")
         console.print("[yellow]•[/yellow] Run with [bold]--prune --confirm[/bold] to apply it.")
         return
 
@@ -1132,7 +1215,7 @@ def backup_forget(
     except backup.BackupError as exc:
         _fail(str(exc))
         return
-    _print_remote_output(output)
+    _print_verbatim(output)
     console.print("[green bold]✓ Retention applied.[/green bold]")
     # Only where Object Lock can apply at all. On a local repository prune
     # really does reclaim space, and a drill found this hint firing there and
