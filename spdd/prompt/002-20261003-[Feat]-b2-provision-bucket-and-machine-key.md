@@ -511,6 +511,38 @@ these objects exist only in memory and the leak path is output rather than argv.
      value that is absent.
 9. **Verification constraints**:
    - This cannot be drilled on a disposable VM. A verification run needs a real Backblaze account
-     and a throwaway bucket, and must end by deleting both the bucket and the key it created.
+     and a throwaway bucket.
    - Until that run has happened, the work is not claimed as verified — the measurements on #16
      cover the API shapes, not this code.
+
+   !!! note "Verified, and what it cost"
+
+       Run against a real account on 2026-10-03. It found four faults, none of which any unit
+       test could have reached, and all four are fixed:
+
+       - `read -r -s -p` is bash; in zsh it means "read from a coprocess", so the bootstrap
+         call's prompts never fired and the chain collapsed four commands later.
+       - A heredoc piped into `python3 -` makes stdin the script, so `getpass` reads the
+         script's own remaining lines.
+       - `typer.prompt(hide_input=True)` raises `EOFError` with no controlling terminal, so the
+         command was unusable from a script, from CI, and from the wizard in #8. The credential
+         may now arrive on a pipe.
+       - **`b2_list_keys` needs `listKeys`**, which B2 treats as distinct from `writeKeys`. The
+         first run created the bucket, set its retention, and *then* failed with an HTTP 401. A
+         transport double that answers 200 has no opinion about capabilities, so all 530 tests
+         passed throughout.
+
+       The fourth left the bucket created, locked and retained with no machine key — this
+       command's own half-provisioned failure mode — which is how the adopt-and-repair path came
+       to be verified against an accident rather than a fixture.
+
+       **Cleanup needs the master key or the console.** The provisioning credential holds
+       neither `deleteKeys` nor `deleteBuckets`, because ADR 0017 names both as capabilities a
+       key must not have. So `provision` creates things it cannot itself remove. That is the
+       design working, and the documentation should say so rather than let an operator discover
+       it while tidying up.
+
+       Not exercised against a live credential: the `bypassGovernance` refusal, which would
+       require handing the master key to the command — the one thing ADR 0021 forbids. It is
+       covered by unit tests over a real-shaped payload, and by the account-wide credential
+       refusal, which did fire against a live bucket-restricted key.
