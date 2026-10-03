@@ -164,6 +164,27 @@ checking that a file exists, so it fails if this password is wrong — and `ples
 --level full` proves it from a machine that has never held the archive. A backup you have
 never restored from is a belief, and `pless preflight` says so until you have.
 
+## The B2 provisioning credential
+
+**What it protects.** The ability to create buckets, set their retention, and mint keys in your
+Backblaze account. Powerful, and deliberately short-lived in use.
+
+**Where it lives.** Your password manager, and nowhere else. It is **not** in `.env`, not in
+`pless.toml` and not in argv: `pless b2 provision` prompts for it, uses it for a handful of API
+calls, and forgets it. The argument for that is mechanical rather than a judgement about how safe
+your laptop is — a credential that is never written cannot be read from a backup, a sync or a
+stolen disk
+([ADR 0021](https://github.com/kschulst/pless/blob/main/adr/0021-provision-the-bucket-with-a-credential-pless-never-stores.md)).
+
+**What it must not hold.** `bypassGovernance`. `pless b2 provision` refuses a credential that
+has it, because B2 cannot be asked to withhold from a new key what the creating key already
+holds — so that refusal is what makes a dangerous machine key unobtainable rather than merely
+unlikely.
+
+**The master key never reaches pless.** There is no code path that accepts it. You use it once,
+by hand, to mint the provisioning credential; `pless b2 provision` prints that exact call when
+it refuses the wrong kind of credential.
+
 ## `B2_KEY_ID` and `B2_APPLICATION_KEY`
 
 **What they protect.** Write access to the bucket holding your snapshots. Not the contents —
@@ -171,7 +192,8 @@ those are already encrypted before they leave the machine.
 
 **Where they live.** Your password manager, and `/opt/paperless/backup.env` on the target.
 
-**If you lose them.** Create a new application key in the B2 console. Nothing is lost.
+**If you lose them.** Run `pless b2 provision --bucket <name> --new-key`, which mints another
+correctly scoped key for the same bucket. Do **not** create one in the console — see below.
 
 **If someone else gets them.** They can disrupt your backups, but not destroy them — provided
 the key was created correctly. See below, because "correctly" is not what the web console does.
@@ -184,10 +206,14 @@ the key was created correctly. See below, because "correctly" is not what the we
     that a correctly scoped key cannot complete leaves **zero versions** when run with a
     console key.
 
-    A safe key exists only through `b2_create_key` in the API, with exactly `listBuckets`,
-    `listFiles`, `readFiles`, `writeFiles` and `deleteFiles`, restricted to one bucket, and
-    **without `bypassGovernance`**. That single exclusion is the whole protection
-    ([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)).
+    A safe key exists only through the API, holding exactly `deleteFiles`, `listBuckets`,
+    `listFiles`, `readBucketRetentions`, `readFiles` and `writeFiles`, restricted to one
+    bucket, and **without `bypassGovernance`**. That single exclusion is the whole protection
+    ([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)); `readBucketRetentions` is what lets the machine verify the lock it
+    depends on rather than trust it ([ADR 0020](https://github.com/kschulst/pless/blob/main/adr/0020-the-machine-key-can-read-the-lock.md)).
+
+    `pless b2 provision` mints exactly that, and fails rather than report success if Backblaze
+    returns anything else.
 
     `pless audit` fails when the target holds a key that can bypass governance.
 
