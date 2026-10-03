@@ -411,6 +411,32 @@ import rather than after.
 Checks network exposure and storage encryption. Exits non-zero on findings, so it works in
 cron and CI. See [Verify your box is sealed](../cookbook/verify-security.md).
 
+**When backup is configured it also checks the bucket behind it**, from the target, in one SSH
+round trip. Three findings, in the order they matter:
+
+- **The credential.** Whether the key on this machine holds anything beyond what restic needs.
+  `bypassGovernance` defeats Object Lock outright and is what a key created in B2's web console
+  actually carries; `writeBuckets`, `writeKeys` and their siblings let a compromised machine
+  reconfigure the bucket so that it can. A key not restricted to one bucket fails too — and so
+  does one missing `readBucketRetentions`, because without it nothing below can be verified at
+  all. An expiring key is a warning naming the date, since an expired one makes backups fail on
+  a day nobody chose.
+- **The bucket.** Five outcomes, because B2 reports five states and conflating any two of them
+  produces a check that is either useless or dangerous. No Object Lock is critical. Object Lock
+  enabled with *no default retention* is **also** critical, and it is the one that looks like
+  success — it is what a bucket looks like when the lock was switched on and nothing else was.
+  Compliance mode is a warning rather than a pass. Governance mode is compared against
+  `version_retention_days`, after reading the period's unit rather than assuming days.
+- **The endpoint.** Whether the configured repository sits under the S3 endpoint this account
+  reports, so backups are not quietly going somewhere that merely resembles it.
+
+Versioning and lifecycle rules are never accepted as evidence of any of this. They do not stop
+explicit version deletion, and a check that passed on them would certify a destroyable setup
+([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)).
+
+The B2 credentials reach `curl` through `/opt/paperless/backup.env` and never through a command
+line. Nothing is sent anywhere except Backblaze, and nothing is written.
+
 ## Documents
 
 ### `pless docs scan <path> [--hashes]`

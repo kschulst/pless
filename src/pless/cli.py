@@ -595,7 +595,7 @@ def audit_cmd(
     result = sshexec.run(target.ssh_args, "sh -s", timeout=120, input_text=audit.COLLECT_SCRIPT)
     if not result.ok:
         _fail(f"Collection failed: {result.stderr.strip()}")
-    report = audit.analyse(result.stdout)
+    report = audit.analyse(result.stdout, cfg)
 
     if json_output:
         console.print_json(
@@ -716,7 +716,7 @@ def preflight_cmd(
     audit_clean = False
     if reachable:
         result = sshexec.run(target.ssh_args, "sh -s", timeout=120, input_text=audit.COLLECT_SCRIPT)
-        audit_clean = result.ok and audit.analyse(result.stdout).ok
+        audit_clean = result.ok and audit.analyse(result.stdout, cfg).ok
 
     drill_passed: bool | None = None
     if drill:

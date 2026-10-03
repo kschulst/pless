@@ -295,8 +295,9 @@ plain string, and its "kind" is a derived property, never a stored enum.
 2. `backup.py` depends on `config`, `sshexec`, `targets`, `composegen` (for `INSTALL_DIR` and the
    compose invocation) and `storage` (for `MOUNTPOINT` and mount state). It must not import
    `deploy` for anything but the compose helper; if that coupling grows, move the helper down.
-3. `audit.py` depends on `composegen` and `storage` as today, plus nothing new — the B2 responses
-   arrive as collected text.
+3. `audit.py` depends on `composegen` and `storage` as today, plus `b2` and `backup` — the B2
+   responses arrive as collected text, and the parsing of that text belongs to the module that
+   also produces the arrangement being checked.
 4. `preflight.py` depends on nothing new; `cli.py` reads the verification record through
    `backup.read_verification_record()` and passes booleans in, as it does today.
 5. `hostspec.py` gains `restic` in `PACKAGES`, delivered identically by both renderers.
@@ -578,9 +579,22 @@ repository kind is a first-class citizen rather than a test fixture.
      requires the S3 endpoint, so the scheme is `s3:` while the credentials are still a B2 key —
      `render_backup_env` emits them as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`, and B2's
      own API accepts the same pair.
-2. `parse_credential_capability(json_text: str) -> CredentialCapability`: pure. Reads
-   `apiInfo.storageApi` — `bucketName`, `capabilities` — and the top-level
-   `applicationKeyExpirationTimestamp`.
+2. **No new parsers, and no new entities.** `b2.py` already parses both responses and
+   classifies the lock five ways, so `audit` imports it and reuses
+   `b2.parse_authorization`, `b2.parse_lock_configuration` and `b2.LockState`.
+
+   !!! note "Amended during Stage 4"
+
+       This section originally specified `parse_credential_capability` and a `BucketProtection`
+       entity of its own, because it was written before `b2.py` existed. Writing them again
+       would put two implementations of the five-state lock classification in the codebase —
+       and a drifted copy of *that* is precisely the "certify a destroyable setup by silence"
+       failure this check exists to prevent.
+
+       One implementation, used by the command that creates the arrangement and by the check
+       that verifies it. It also means `audit` now depends on `b2` and on `backup` (for the
+       environment file's path), which the dependency note below did not anticipate; both are
+       core modules with no host and no presentation layer, so the layering holds.
 3. `check_backup_credential(capability: CredentialCapability) -> Finding`:
    - CRITICAL when the key is not restricted to a single bucket, or holds any of
      `writeBuckets`, `deleteBuckets`, `writeBucketRetentions`, `writeKeys`, `deleteKeys` — those
@@ -616,9 +630,27 @@ repository kind is a first-class citizen rather than a test fixture.
      which is the mistake this check exists to catch.
    - Versioning and lifecycle rules are **not** accepted as evidence — they do not stop explicit
      version deletion, and a check that passed on them would certify a destroyable setup.
-5. `check_backup_locality(repository: str) -> Finding`:
-   - WARNING for a local repository, saying in one sentence that it protects against deletion and
-     corruption but not against loss of the machine.
+5. ~~`check_backup_locality(repository: str) -> Finding`~~ — **dropped.**
+
+   !!! note "Dropped during Stage 4"
+
+       Three reasons, found while wiring it up rather than while specifying it.
+
+       `AuditReport.ok` treats every `ok=False` finding as blocking, whatever its severity, and
+       `pless preflight` gates a green light on it. So a WARNING here would have made a local
+       repository *block* readiness — a behaviour change nobody asked for, and one that
+       contradicts this canvas treating a local repository as a first-class citizen rather
+       than a test fixture.
+
+       The information already reaches the operator twice: `pless backup init` prints exactly
+       this caveat, and the configuration reference carries a warning admonition about it.
+
+       And it is in the wrong audit. A local repository is a durability shortfall, not an
+       exposure one; `pless audit` answers "what can someone on your network reach".
+
+       It leaves a real question open, which is not this change's to settle: **should a WARNING
+       finding block `preflight` at all?** Today one does, including the existing encrypted-storage
+       warning. Relaxing that would weaken a guard that predates this work.
 6. `check_repository_endpoint(repository: str, s3_api_url: str) -> Finding`:
    - WARNING when the configured repository does not sit under the account's own
      `apiInfo.storageApi.s3ApiUrl`. The machine key can read that field, so the audit can confirm
