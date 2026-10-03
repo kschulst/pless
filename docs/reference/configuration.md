@@ -238,11 +238,12 @@ afterwards, because a key that could would be a key that could remove it. It is 
 to explain why `pless backup forget --prune` may reclaim nothing: under Object Lock the data
 stays until the window expires.
 
-An audit check against this number is [not built
-yet](https://github.com/kschulst/pless/issues/16). It cannot simply run on the target: the
-machine's key is not authorised to read the bucket's lock configuration, so B2 returns the
-field with its value redacted, and a check written against that would be unable to tell "no
-Object Lock" from "not allowed to look".
+`pless audit` checks the bucket against this number, from the target. That needs the machine
+key to hold `readBucketRetentions` — without it B2 returns the lock configuration with its
+value redacted, and a check written against that could not tell "no Object Lock" from "not
+allowed to look"
+([ADR 0020](https://github.com/kschulst/pless/blob/main/adr/0020-the-machine-key-can-read-the-lock.md)).
+`pless b2 provision` mints a key that holds it; `pless audit` reports a key that does not.
 
 !!! warning "The bucket and the key must be made through the API"
 
