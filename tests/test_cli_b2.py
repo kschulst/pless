@@ -215,8 +215,10 @@ class TestTheBucketIsRequired:
     def test_no_bucket_is_a_usage_error(self) -> None:
         result = invoke(["b2", "provision"], CREDENTIALS)
 
-        assert result.exit_code != 0
-        assert "--bucket" in result.output
+        # Click's exit code for a usage error. Asserted rather than the rendered
+        # text, which typer boxes and wraps differently depending on terminal
+        # width and whether colour is on — CI and a local run disagreed.
+        assert result.exit_code == 2
 
     def test_new_key_is_passed_through(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: list[bool] = []
