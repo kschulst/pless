@@ -10,6 +10,19 @@ from pless.targets import Host
 
 DATA_SUBDIRS = ["consume", "export", "media", "data", "postgres", "redis", "backups"]
 
+# How a registry says no. All of these read as a credentials fault and are
+# usually an anonymous pull limit, which is the distinction worth making:
+# one is something the operator must fix, the other is something they should
+# simply try again.
+REGISTRY_REFUSALS = (
+    "unauthorized",
+    "authentication required",
+    "toomanyrequests",
+    "too many requests",
+    "denied: requested access",
+    "rate limit",
+)
+
 
 class DeployError(RuntimeError):
     pass
@@ -38,6 +51,79 @@ def _write_remote_file(
     _run_ok(target, f"sudo tee {quoted} > /dev/null && sudo chmod {mode} {quoted}", content)
     if owner:
         _run_ok(target, f"sudo chown {owner} {quoted}")
+
+
+def registry_refused(text: str) -> bool:
+    """Does this failure read like a registry turning us away? Pure."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in REGISTRY_REFUSALS)
+
+
+def _rate_limit_note() -> str:
+    return (
+        "A registry refused to serve an image. That reads like a credentials problem and is "
+        "usually an anonymous pull limit, so running the command again often works."
+    )
+
+
+def pull(target: Host, timeout: int = 1800) -> str:
+    """Fetch the images ahead of the unit. Returns a problem, or "" if fine.
+
+    `systemctl start` pulls as a side effect, and when a registry refuses
+    mid-pull the unit fails and systemd's summary is all that comes back —
+    which says nothing about registries. Doing it here first means the
+    registry's own words are available to say so.
+
+    Deliberately not fatal. `docker compose pull` contacts the registry even
+    when every image is already local, so a rate-limited network would break a
+    redeploy that would otherwise have started from cache. The job here is to
+    explain a failure, not to cause one.
+    """
+    result = _run(
+        target, f"cd {composegen.INSTALL_DIR} && sudo docker compose pull", timeout=timeout
+    )
+    if result.ok:
+        return ""
+    detail = result.stderr.strip() or result.stdout.strip()
+    if registry_refused(detail):
+        return f"{_rate_limit_note()}\n\n{detail}"
+    return f"Fetching the images did not complete: {detail}"
+
+
+def unit_journal(target: Host, unit: str, lines: int = 20) -> str:
+    """The unit's own last words, for when systemd only offers its summary."""
+    result = _run(target, f"sudo journalctl -u {shlex.quote(unit)} --no-pager -n {lines}")
+    return result.stdout.strip() if result.ok else ""
+
+
+def start_unit(target: Host, unit: str, timeout: int = 900, context: str = "") -> None:
+    """Start a unit, and on failure say what the unit itself said.
+
+    systemd reports that "the control process exited with error code" and
+    points at `journalctl`. The cause is in the journal, and an operator who
+    has to go and look has been handed a message that names nothing.
+    """
+    result = _run(target, f"sudo systemctl start {shlex.quote(unit)}", timeout=timeout)
+    if result.ok:
+        return
+
+    detail = result.stderr.strip() or result.stdout.strip()
+    if result.timed_out:
+        raise DeployError(f"Starting {unit} timed out: {detail}")
+
+    journal = unit_journal(target, unit)
+    parts = [f"{unit} failed to start."]
+    if registry_refused(journal) or (context and registry_refused(context)):
+        parts.append(_rate_limit_note())
+    elif context:
+        # The pull already explained itself; the start failing makes that
+        # explanation relevant rather than incidental.
+        parts.append(context)
+    if detail:
+        parts.append(detail)
+    if journal:
+        parts.append(f"From the unit's own journal:\n{journal}")
+    raise DeployError("\n\n".join(parts))
 
 
 def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
@@ -71,8 +157,11 @@ def install(cfg: config.Config, secrets: config.Secrets, target: Host) -> None:
     )
     _write_remote_file(target, "/etc/systemd/system/paperless.service", composegen.SYSTEMD_UNIT)
     _run_ok(target, "sudo systemctl daemon-reload")
-    # The first start pulls roughly 2 GB of images — allow plenty of time.
-    _run_ok(target, "sudo systemctl start paperless.service", timeout=900)
+    # Roughly 2 GB of images. Pulled here rather than as a side effect of the
+    # unit, so that a registry refusing mid-pull is reported as such instead of
+    # as "the control process exited with error code".
+    problem = pull(target)
+    start_unit(target, "paperless.service", context=problem)
 
 
 def compose(target: Host, args: str, timeout: int = 120) -> str:

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -106,6 +107,31 @@ def _preflight(*args: str) -> Result:
     result = runner.invoke(cli.app, ["preflight", *args])
     assert result.exception is None or isinstance(result.exception, SystemExit), result.exception
     return result
+
+
+class TestATargetThatHangs:
+    """#13 — the clearest case for it: a machine that accepts the connection
+    and then stops answering made `preflight` exit with a traceback instead of
+    reporting NOT READY, at the exact moment someone was about to import
+    documents."""
+
+    @pytest.fixture
+    def hanging(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(config, "load_config", _load_config)
+
+        def hang(argv, capture_output=False, text=False, timeout=None, input=None):
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout or 0)
+
+        monkeypatch.setattr(subprocess, "run", hang)
+
+    def test_it_decides_rather_than_crashing(self, hanging: None) -> None:
+        result = _preflight()
+        assert result.exit_code != 0
+        assert "NOT READY" in result.output
+
+    def test_it_says_the_target_did_not_answer(self, hanging: None) -> None:
+        result = _preflight()
+        assert "target reachable" in result.output
 
 
 class TestUnreachableTarget:
