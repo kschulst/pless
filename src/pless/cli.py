@@ -353,6 +353,17 @@ def docs_estimate(
             )
 
 
+def _print_remote_output(text: str) -> None:
+    """Print a tool's own output without rich reinterpreting it.
+
+    restic prints aligned tables, and rich re-wraps them into nonsense at any
+    narrow terminal. It also writes things like `filtered by []`, and square
+    brackets are rich's markup syntax — so arbitrary remote output can be
+    swallowed, or raise, on its way to the screen.
+    """
+    console.print(text, markup=False, highlight=False, soft_wrap=True)
+
+
 def _host(cfg: config.Config) -> targets.Host:
     try:
         return targets.resolve_host(cfg)
@@ -1103,7 +1114,7 @@ def backup_forget(
         except backup.BackupError as exc:
             _fail(str(exc))
             return
-        console.print(output or "Nothing matched the retention policy.")
+        _print_remote_output(output or "Nothing matched the retention policy.")
         console.print("[yellow]•[/yellow] Run with [bold]--prune --confirm[/bold] to apply it.")
         return
 
@@ -1121,13 +1132,19 @@ def backup_forget(
     except backup.BackupError as exc:
         _fail(str(exc))
         return
-    console.print(output)
+    _print_remote_output(output)
     console.print("[green bold]✓ Retention applied.[/green bold]")
-    if cfg.backup.version_retention_days:
+    # Only where Object Lock can apply at all. On a local repository prune
+    # really does reclaim space, and a drill found this hint firing there and
+    # telling the operator something untrue. Even off-site pless cannot know
+    # whether the bucket carries a lock — that is the check #16 is about — so
+    # the sentence stays conditional.
+    if cfg.backup.version_retention_days and not cfg.backup.is_local_repository:
         console.print(
-            f"[yellow]•[/yellow] Under Object Lock, deletes become delete markers and prune "
-            f"reclaims nothing until the {cfg.backup.version_retention_days}-day retention "
-            "expires. That is the price of immutability, not a failure."
+            f"[yellow]•[/yellow] If the bucket carries Object Lock, deletes become delete "
+            f"markers and prune reclaims nothing until the "
+            f"{cfg.backup.version_retention_days}-day retention expires. That is the price "
+            "of immutability, not a failure."
         )
 
 
