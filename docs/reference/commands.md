@@ -314,7 +314,7 @@ created = call(
     {
         "accountId": "YOUR_ACCOUNT_ID",
         "keyName": "pless-provisioning",
-        "capabilities": ["deleteFiles", "listBuckets", "listFiles", "readBucketRetentions", "readFiles", "writeBucketRetentions", "writeBuckets", "writeFiles", "writeKeys"],
+        "capabilities": ["deleteFiles", "listBuckets", "listFiles", "listKeys", "readBucketRetentions", "readFiles", "writeBucketRetentions", "writeBuckets", "writeFiles", "writeKeys"],
     },
     {"Authorization": auth["authorizationToken"], "Content-Type": "application/json"},
 )

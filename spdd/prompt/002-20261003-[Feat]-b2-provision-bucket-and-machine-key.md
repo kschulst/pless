@@ -219,7 +219,19 @@ these objects exist only in memory and the leak path is output rather than argv.
      `deleteFiles, listBuckets, listFiles, readBucketRetentions, readFiles, writeFiles`.
    - `FORBIDDEN_IN_PROVISIONING_KEY = ("bypassGovernance",)` — the single exclusion that makes a
      dangerous machine key unobtainable.
-   - `REQUIRED_IN_PROVISIONING_KEY = ("writeBuckets", "writeBucketRetentions", "writeKeys")`
+   - `REQUIRED_IN_PROVISIONING_KEY = ("listKeys", "writeBucketRetentions", "writeBuckets",
+     "writeKeys")`
+
+   !!! note "Corrected during verification"
+
+       `listKeys` was missing. B2 treats listing keys as a capability distinct from creating
+       them, so a credential with `writeKeys` alone can mint a key and not see one — and
+       `existing_machine_keys` then got an HTTP 401 *after* the bucket had been created and its
+       retention set. No fake transport could have found this: a double that answers 200 has no
+       opinion about capabilities.
+
+       The run that found it left the bucket in exactly the half-provisioned state this command
+       is built to repair, which is how the adopt-and-repair path came to be verified for real.
    - `MACHINE_KEY_NAME = "pless-machine"`
    - `BUCKET_NAME_PATTERN` — B2's documented rule: 6–50 characters, lowercase letters, digits and
      hyphens, not starting or ending with a hyphen, not starting with `b2-`.
