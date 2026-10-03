@@ -97,8 +97,10 @@ _BACKUP_COLLECT = r"""echo "##BACKUP"
 if command -v restic > /dev/null 2>&1; then echo "restic: present"; else echo "restic: missing"; fi
 echo "backup-timer: $(systemctl is-enabled pless-backup.timer 2>/dev/null || echo unknown)"
 echo "verify-timer: $(systemctl is-enabled pless-backup-verify.timer 2>/dev/null || echo unknown)"
-echo "##B2AUTH"
-echo "##B2BUCKET"
+# No placeholder markers for the B2 sections. `split_sections` resets a section
+# every time it sees its marker, so emitting them twice meant the real data
+# only survived because the second one happened to come last — true, and far
+# too subtle to rely on. A section that never appears is handled by `analyse`.
 if [ -r %(env_file)s ]; then
   . %(env_file)s
   B2_ID="${AWS_ACCESS_KEY_ID:-${B2_ACCOUNT_ID:-}}"
