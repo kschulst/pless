@@ -170,9 +170,10 @@ selected. Fix: `pless b2 provision --bucket <name> --new-key`, which mints one t
 including you. There is no recovery path and `pless` cannot build one.
 
 **Losing the Backblaze account itself.** Object Lock protects against a compromised machine,
-not against an account suspension. `pless backup mirror` is the answer to that and does not
-exist yet — see [#2](https://github.com/kschulst/pless/issues/2) for why it is harder than it
-looks.
+not against an account suspension — and `pless backup mirror <repository>` is the answer to
+that. For a genuinely different provider the destination is an rclone remote, because restic
+cannot hold two sets of credentials for one backend; see
+[Commands](../reference/commands.md) for which destinations work.
 
 **A corrupted source.** Backup copies what is there. If Paperless damaged a document a week
 ago and you notice today, the snapshots have the damaged version — which is what makes

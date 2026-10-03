@@ -232,6 +232,43 @@ restore` is the command that puts an archive back.
 
 The default destination is `[paths] local_backups`.
 
+### `pless backup mirror <repository>`
+
+Copies every `pless` snapshot to a second repository, still encrypted the whole way. The answer
+to "what if the Backblaze account is lost" — which Object Lock does not cover, because a lock
+protects history from a compromised machine, not from an account suspension.
+
+Nothing is decrypted in transit or at rest: `restic copy` moves packs between repositories.
+
+**The destination uses the same `RESTIC_PASSWORD`.** One secret opens both, so the archive can
+be restored from either. A second password would be a second secret with no recovery path, and a
+mirror that needs a secret you do not have is not a mirror.
+
+**Which destinations work.** Anything restic can reach with the credentials already on the
+target: a local path, an sftp destination, or another bucket under the same key. For a
+*different provider* — which is the interesting case — use an
+[rclone](https://rclone.org/) remote, `rclone:remote:path`.
+
+That restriction is restic's, not `pless`'s. Its documentation says that when source and
+destination share a backend, "it might not be possible to specify different accounts for the
+source and destination repository", and recommends the rclone backend instead. So `pless` passes
+the destination through as the opaque string it already is, and adds no credentials of its own.
+
+A fresh destination is initialised before the first copy, so you do not have to.
+
+!!! note "It requires restic 0.14 or later"
+
+    `restic copy` **reversed its arguments** at 0.14: before, the source was `-r` and the
+    destination `--repo2`; after, it is the other way round. Both forms exit zero, so getting it
+    backwards copies the mirror into your archive and reports success.
+
+    `pless` therefore uses only the modern invocation and refuses an older restic by name rather
+    than guessing. Debian 13 ships 0.17 and Ubuntu 24.04 ships 0.16, so this affects nothing
+    `pless` supports.
+
+A mirror is a copy, not a verified backup. If you want to know it restores, point
+`[backup] restic_repository` at it and run `pless backup verify`.
+
 ### `pless backup forget [--prune] --confirm`
 
 Applies the retention policy from `[backup]` — `retention_daily`, `retention_weekly`,
@@ -470,10 +507,5 @@ Verifies `HCLOUD_TOKEN` with read-only API calls and lists visible servers and l
 
 ## Not built yet
 
-`pless docs upload`, `pless update` and `pless backup mirror` are planned but do not exist.
-`mirror` is held up by an unresolved question: `restic copy` reads object-storage credentials
-from process-wide environment variables, so one invocation cannot reach two providers with
-different keys — which is the case it exists for. See
-[#2](https://github.com/kschulst/pless/issues/2).
-
-See [Cookbook](../cookbook/index.md) for what to do in the meantime.
+`pless docs upload` and `pless update` are planned but do not exist. See
+[Cookbook](../cookbook/index.md) for what to do in the meantime.

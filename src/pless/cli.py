@@ -1247,6 +1247,35 @@ def backup_extract(
     )
 
 
+@backup_app.command("mirror")
+def backup_mirror(
+    destination: str = typer.Argument(..., help="Where to copy to. A restic repository."),
+) -> None:
+    """Copy the repository somewhere else, still encrypted the whole way."""
+    cfg = config.load_config()
+    target = _host(cfg)
+
+    console.print(
+        f"Copying every [bold]{backup.SNAPSHOT_TAG}[/bold] snapshot to "
+        f"[bold]{destination}[/bold]. Nothing is decrypted on the way, and the destination "
+        "uses the same RESTIC_PASSWORD — so one secret opens both."
+    )
+    console.print("A first mirror copies the whole archive and can take hours…")
+    try:
+        output = backup.mirror(cfg, target, destination)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    _print_verbatim(output or "Nothing to copy: the destination already has every snapshot.")
+    console.print(f"[green bold]✓ Mirrored to {destination}.[/green bold]")
+    console.print(
+        "[yellow]•[/yellow] A mirror is not a verified backup. Point [bold]\[backup]"
+        "restic_repository[/bold] at it and run `pless backup verify` if you want to know "
+        "it restores."
+    )
+
+
 @backup_app.command("forget")
 def backup_forget(
     prune: bool = typer.Option(

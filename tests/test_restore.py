@@ -10,6 +10,7 @@ must not be a day these tests keep passing while restore breaks.
 from __future__ import annotations
 
 import pytest
+from ssh_doubles import FakeSsh
 
 from pless import backup, config, sshexec, storage
 from pless.targets import Host
@@ -21,36 +22,6 @@ def a_config(**backup_overrides) -> config.Config:
     cfg = config.Config()
     cfg.backup = config.BackupConfig(**backup_overrides)
     return cfg
-
-
-class FakeSsh:
-    """Answers remote commands by substring, and remembers the order they came in."""
-
-    def __init__(self, answers: dict[str, tuple[int, str]] | None = None) -> None:
-        self.answers = answers or {}
-        self.commands: list[str] = []
-
-    def run(
-        self,
-        destination: list[str],
-        remote_command: str,
-        timeout: int = 60,
-        input_text: str | None = None,
-    ) -> sshexec.SshResult:
-        self.commands.append(remote_command)
-        for fragment, (code, out) in self.answers.items():
-            if fragment in remote_command:
-                return sshexec.SshResult(exit_code=code, stdout=out, stderr="" if not code else out)
-        return sshexec.SshResult(exit_code=0, stdout="", stderr="")
-
-    def ran(self, fragment: str) -> bool:
-        return any(fragment in command for command in self.commands)
-
-    def index_of(self, fragment: str) -> int:
-        for position, command in enumerate(self.commands):
-            if fragment in command:
-                return position
-        raise AssertionError(f"No command contained {fragment!r}: {self.commands}")
 
 
 def a_mounted_volume(monkeypatch: pytest.MonkeyPatch) -> None:
