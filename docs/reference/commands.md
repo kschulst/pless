@@ -359,6 +359,14 @@ nothing to delete.
 The region is never configured and never typed. Backblaze reports the account's own S3 endpoint,
 and `provision` assembles the repository location from it.
 
+**It cannot clean up after itself.** The provisioning credential holds neither `deleteKeys` nor
+`deleteBuckets`, because
+[ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)
+names both as capabilities a key must not have. So removing a bucket or a key is a job for the
+Backblaze console, or for an API call with your master key. That is the design working rather
+than a limitation to work around — but it is worth knowing before you go looking for a
+`--delete` flag.
+
 ## Access and security
 
 ### `pless tailscale up`
