@@ -11,6 +11,8 @@ returns is a failure mode this project has had before.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from b2_payloads import (
     AUTHORIZE_V2,
@@ -205,7 +207,9 @@ class TestRefuseProvisioningCredential:
         message = str(exc.value)
         assert "b2_create_key" in message
         assert "acct" in message, "the account id is filled in, not left as a placeholder"
-        assert "<" not in message.split("Mint one")[1], "nothing left to substitute"
+        # No <ANGLE_BRACKET> placeholders. Checked by shape rather than by
+        # looking for "<", because the heredoc marker legitimately contains one.
+        assert not re.search(r"<[A-Za-z_][\w -]*>", message), "something is left to substitute"
 
     def test_a_bucket_restricted_credential_is_refused_up_front(self) -> None:
         """Failing at b2_create_bucket instead would be late and obscure."""
@@ -232,8 +236,26 @@ class TestRefuseProvisioningCredential:
     def test_the_bootstrap_call_never_grants_bypass_governance(self) -> None:
         assert "bypassGovernance" not in b2.bootstrap_key_command("acct")
 
-    def test_the_bootstrap_call_unsets_the_master_key_afterwards(self) -> None:
-        assert "unset" in b2.bootstrap_key_command("acct")
+    def test_the_bootstrap_call_does_not_depend_on_which_shell_pastes_it(self) -> None:
+        """The first version prompted with `read -r -s -p`, which is bash. In zsh
+        that flag means "read from a coprocess", so the prompts never fired and
+        the chain collapsed four commands later. Found by running it."""
+        command = b2.bootstrap_key_command("acct")
+
+        assert "read -p" not in command
+        assert "read -r" not in command
+        assert "getpass" in command, "it prompts through Python, not the shell"
+
+    def test_the_script_is_not_piped_into_python_stdin(self) -> None:
+        """`python3 - <<EOF` makes stdin the script, so getpass would read the
+        script's own remaining lines instead of prompting."""
+        command = b2.bootstrap_key_command("acct")
+
+        assert "python3 - <<" not in command
+        assert command.startswith("cat > ")
+
+    def test_the_bootstrap_call_cleans_up_after_itself(self) -> None:
+        assert "rm -f" in b2.bootstrap_key_command("acct")
 
 
 class TestRepositoryFor:

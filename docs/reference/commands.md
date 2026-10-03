@@ -286,16 +286,50 @@ The credential is prompted, used for the API calls, and written nowhere — not 
 prints exactly this when you have the wrong kind:
 
 ```sh
-read -r -s -p 'B2 master keyID: ' MK_ID; echo
-read -r -s -p 'B2 master applicationKey: ' MK_KEY; echo
-AUTH=$(curl -sS -u "$MK_ID:$MK_KEY" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
-API=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["apiInfo"]["storageApi"]["apiUrl"])')
-TOK=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorizationToken"])')
-curl -sS -X POST "$API/b2api/v3/b2_create_key" \
-  -H "Authorization: $TOK" -H 'Content-Type: application/json' \
-  -d '{"accountId":"YOUR_ACCOUNT_ID","keyName":"pless-provisioning","capabilities":["deleteFiles","listBuckets","listFiles","readBucketRetentions","readFiles","writeBucketRetentions","writeFiles","writeKeys"]}'
-unset MK_ID MK_KEY AUTH API TOK
+cat > /tmp/pless-provisioning-key.py <<'PLESS_EOF'
+import base64
+import getpass
+import json
+import urllib.request
+
+key_id = getpass.getpass("B2 master keyID: ")
+app_key = getpass.getpass("B2 master applicationKey: ")
+
+
+def call(url, body=None, headers=None):
+    data = json.dumps(body).encode() if body else None
+    request = urllib.request.Request(url, data=data, headers=headers or {})
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+basic = base64.b64encode(f"{key_id}:{app_key}".encode()).decode()
+auth = call(
+    "https://api.backblazeb2.com/b2api/v3/b2_authorize_account",
+    headers={"Authorization": "Basic " + basic},
+)
+storage = auth["apiInfo"]["storageApi"]
+created = call(
+    storage["apiUrl"] + "/b2api/v3/b2_create_key",
+    {
+        "accountId": "YOUR_ACCOUNT_ID",
+        "keyName": "pless-provisioning",
+        "capabilities": ["deleteFiles", "listBuckets", "listFiles", "readBucketRetentions", "readFiles", "writeBucketRetentions", "writeBuckets", "writeFiles", "writeKeys"],
+    },
+    {"Authorization": auth["authorizationToken"], "Content-Type": "application/json"},
+)
+print()
+print("keyID         :", created["applicationKeyId"])
+print("applicationKey:", created["applicationKey"])
+print()
+print("Shown once. Save both, then run `pless b2 provision`.")
+PLESS_EOF
+python3 /tmp/pless-provisioning-key.py; rm -f /tmp/pless-provisioning-key.py
 ```
+
+Replace `YOUR_ACCOUNT_ID` with your Backblaze account id, which the console shows under
+*Account*. That is the only substitution anywhere in this setup — and `provision`'s own refusal
+prints this with the id already filled in, because it has authenticated by then.
 
 Getting that wrong is safe: `provision` inspects the credential before creating anything, so the
 next run tells you what is missing. That is unlike the bucket, where a wrong answer is invisible
