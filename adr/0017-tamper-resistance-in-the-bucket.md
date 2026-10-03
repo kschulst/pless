@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-08
+- **Status note:** amended by [0020](0020-the-machine-key-can-read-the-lock.md), which adds
+  `readBucketRetentions` to the capability list below — the `pless audit` check promised here
+  cannot be performed by a key that holds only the five
 - **Context references:** issues #2 and #14; amends [0013](0013-backup-offsite-and-drilled.md)
 
 ## Context
