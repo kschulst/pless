@@ -233,8 +233,15 @@ runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--
 `--keep-monthly` and `--keep-yearly`.
 
 **`version_retention_days`** is what the bucket's Object Lock default retention is expected to
-be. `pless` does not set it — a key that could would be a key that could remove it — but
-`pless audit` checks the bucket against this number.
+be. `pless` does not set it — a key that could would be a key that could remove it. It is used
+to explain why `pless backup forget --prune` may reclaim nothing: under Object Lock the data
+stays until the window expires.
+
+An audit check against this number is [not built
+yet](https://github.com/kschulst/pless/issues/16). It cannot simply run on the target: the
+machine's key is not authorised to read the bucket's lock configuration, so B2 returns the
+field with its value redacted, and a check written against that would be unable to tell "no
+Object Lock" from "not allowed to look".
 
 !!! warning "The bucket and the key must be made through the API"
 
