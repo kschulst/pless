@@ -898,7 +898,7 @@ def b2_provision(
     )
     console.print(
         "The provisioning credential is used for the API calls and written nowhere — not "
-        "\[backup], not .env, not argv."
+        "\\[backup], not .env, not argv."
     )
 
     # Prompted, never an option: anything in argv is readable by any local user
@@ -930,7 +930,7 @@ def b2_provision(
     if outcome.repaired_retention and not outcome.created_bucket:
         console.print("[green]✓[/green] The retention was missing or too short, and was set.")
 
-    console.print("\n[bold]Put this in pless.toml, under \[backup]:[/bold]\n")
+    console.print("\n[bold]Put this in pless.toml, under \\[backup]:[/bold]\n")
     _print_verbatim(f'    restic_repository = "{outcome.repository}"')
 
     console.print("\n[bold]The machine key — this is the only time it is shown:[/bold]\n")
