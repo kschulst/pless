@@ -308,6 +308,53 @@ def parse_bucket(payload: dict) -> Bucket:
     )
 
 
+BOOTSTRAP_SCRIPT_PATH = "/tmp/pless-provisioning-key.py"
+
+# The body of the bootstrap script, with three fields filled in. Python rather
+# than shell: the first version prompted with `read -r -s -p`, which is bash —
+# in zsh that flag means "read from a coprocess", so the prompts never appeared
+# and the chain collapsed four commands later. A snippet whose only job is to
+# work when pasted cannot depend on which shell pastes it.
+_BOOTSTRAP_SCRIPT = """\
+import base64
+import getpass
+import json
+import urllib.request
+
+key_id = getpass.getpass("B2 master keyID: ")
+app_key = getpass.getpass("B2 master applicationKey: ")
+
+
+def call(url, body=None, headers=None):
+    data = json.dumps(body).encode() if body else None
+    request = urllib.request.Request(url, data=data, headers=headers or {})
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+basic = base64.b64encode(f"{key_id}:{app_key}".encode()).decode()
+auth = call(
+    "%(api_url)s/b2api/%(version)s/b2_authorize_account",
+    headers={"Authorization": "Basic " + basic},
+)
+storage = auth["apiInfo"]["storageApi"]
+created = call(
+    storage["apiUrl"] + "/b2api/%(version)s/b2_create_key",
+    {
+        "accountId": "%(account_id)s",
+        "keyName": "%(key_name)s",
+        "capabilities": %(capabilities)s,
+    },
+    {"Authorization": auth["authorizationToken"], "Content-Type": "application/json"},
+)
+print()
+print("keyID         :", created["applicationKeyId"])
+print("applicationKey:", created["applicationKey"])
+print()
+print("Shown once. Save both, then run `pless b2 provision`.")
+"""
+
+
 def bootstrap_key_command(account_id: str) -> str:
     """The call that mints a correct provisioning key, ready to paste.
 
@@ -316,29 +363,27 @@ def bootstrap_key_command(account_id: str) -> str:
     on placeholders pasted literally and then on `$EDITOR` being unset.
     Instructions requiring substitution are where operators go wrong.
 
-    The master key is read interactively and unset afterwards. It deliberately
+    The heredoc feeds `cat`, not `python3`. Piping it into `python3 -` would
+    make stdin the script itself, and `getpass` would read the script's own
+    remaining lines instead of prompting.
+
+    The master key is prompted, used once, and never written. It deliberately
     never reaches pless — there is no code path here that accepts it (ADR 0021).
     """
     capabilities = sorted({*MACHINE_KEY_CAPABILITIES, *REQUIRED_IN_PROVISIONING_KEY})
-    body = json.dumps(
-        {
-            "accountId": account_id,
-            "keyName": PROVISIONING_KEY_NAME,
-            "capabilities": capabilities,
-        }
+    script = _BOOTSTRAP_SCRIPT % {
+        "api_url": API_URL,
+        "version": API_VERSION,
+        "account_id": account_id,
+        "key_name": PROVISIONING_KEY_NAME,
+        "capabilities": json.dumps(capabilities),
+    }
+    return (
+        f"cat > {BOOTSTRAP_SCRIPT_PATH} <<'PLESS_EOF'\n"
+        f"{script}"
+        "PLESS_EOF\n"
+        f"python3 {BOOTSTRAP_SCRIPT_PATH}; rm -f {BOOTSTRAP_SCRIPT_PATH}"
     )
-    return f"""\
-read -r -s -p 'B2 master keyID: ' MK_ID; echo
-read -r -s -p 'B2 master applicationKey: ' MK_KEY; echo
-AUTH=$(curl -sS -u "$MK_ID:$MK_KEY" {API_URL}/b2api/{API_VERSION}/b2_authorize_account)
-API=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; \
-print(json.load(sys.stdin)["apiInfo"]["storageApi"]["apiUrl"])')
-TOK=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; \
-print(json.load(sys.stdin)["authorizationToken"])')
-curl -sS -X POST "$API/b2api/{API_VERSION}/b2_create_key" \\
-  -H "Authorization: $TOK" -H 'Content-Type: application/json' \\
-  -d '{body}'
-unset MK_ID MK_KEY AUTH API TOK"""
 
 
 def refuse_provisioning_credential(auth: Authorization) -> None:

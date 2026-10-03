@@ -256,9 +256,25 @@ these objects exist only in memory and the leak path is output rather than argv.
      `b2_create_bucket` instead would be late and obscure.
    - Raises when any of `REQUIRED_IN_PROVISIONING_KEY` is missing, naming which.
 7. `bootstrap_key_command(account_id: str) -> str`:
-   - The finished `b2_create_key` call that mints a correct provisioning key, ready to paste, with
-     the account id filled in and the credential read from the operator's environment. No
-     placeholder a reader has to substitute.
+   - The finished call that mints a correct provisioning key, ready to paste, with the account id
+     filled in and nothing for a reader to substitute.
+
+   !!! note "Corrected during verification"
+
+       The first version used shell builtins to prompt: `read -r -s -p 'B2 master keyID: '`.
+       That is **bash** syntax. In zsh — the default shell on macOS, and the one this was pasted
+       into — `read -p` means "read from a coprocess", so the prompts never fired, the variables
+       stayed empty, and the chain collapsed four commands later with `KeyError: 'apiInfo'`.
+       A command whose entire purpose is to work when pasted cannot depend on which shell is
+       pasting it.
+
+       It is now a Python script, because the call already needed Python to read the JSON and
+       because `getpass` prompts without any shell involvement. The heredoc feeds `cat` rather
+       than `python3`, so the script runs with the terminal as its stdin — a heredoc piped
+       straight into `python3 -` would make `getpass` read the script's own remaining lines.
+       Both of those were found by running it, not by reading it.
+
+       A test asserts the command contains no `read -p`.
 8. `repository_for(s3_api_url: str, bucket_name: str) -> str`:
    - `s3:{s3_api_url}/{bucket_name}`, the form ADR 0017 specifies.
 9. `retention_satisfies(lock: LockConfiguration, required_days: int) -> bool`:

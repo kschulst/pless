@@ -141,6 +141,22 @@ class TestLinks:
         assert not broken, f"{page.relative_to(REPO_ROOT)} links to missing files: {broken}"
 
 
+class TestTheDocumentedBootstrapCall:
+    """The commands page carries the call `pless b2 provision` prints when it
+    refuses a credential. Transcribing it by hand is how the two drift, and a
+    drifted copy of this one is a setup that silently does not protect
+    anything."""
+
+    def test_the_page_carries_exactly_what_the_code_emits(self) -> None:
+        from pless import b2
+
+        page = COMMANDS_PAGE.read_text()
+        assert b2.bootstrap_key_command("YOUR_ACCOUNT_ID") in page, (
+            "docs/reference/commands.md no longer matches b2.bootstrap_key_command(). "
+            "Regenerate it rather than editing it by hand."
+        )
+
+
 class TestArchitectureDecisionRecords:
     """ADRs live beside the code, not on the site, and the register must be complete."""
 
