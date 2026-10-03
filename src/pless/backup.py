@@ -21,9 +21,12 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 
 from pless import composegen, config, sshexec, storage
 from pless.targets import Host
@@ -50,6 +53,12 @@ VERIFY_SERVICE_UNIT = "/etc/systemd/system/pless-backup-verify.service"
 VERIFY_TIMER_UNIT = "/etc/systemd/system/pless-backup-verify.timer"
 
 SNAPSHOT_TAG = "pless"
+
+# What `extract` leaves behind. Thumbnails and manifests are Paperless's
+# bookkeeping, not documents: excluding them is what makes the result a pile
+# of readable files rather than half an export that looks re-importable and
+# is not. Use `restore` for that.
+EXTRACT_EXCLUDES = ("*-manifest.json", "*-thumbnail.webp")
 
 # What may be handed to `restic restore`. Everything reaching the target goes
 # through a single-quoted `sh -c`, and the set of legal values is small enough
@@ -720,6 +729,24 @@ def parse_queue_state(text: str) -> QueueState:
     return QueueState(pending=pending, active=active)
 
 
+def repository_label(repository: str) -> str:
+    """The bucket or directory name, for a confirmation prompt to ask for.
+
+    Deliberately not the whole location: an operator about to prune history
+    should be made to name the thing they are pruning, and a prompt that asks
+    them to retype an S3 endpoint teaches them to paste instead of read.
+    """
+    if not repository:
+        return ""
+    scheme, separator, rest = repository.partition(":")
+    if separator and scheme.lower() == "b2":
+        # b2:<bucket>:<path> — the bucket is the first segment.
+        return rest.split(":", 1)[0].strip("/")
+    target = rest if separator else repository
+    # An endpoint URL, a path, or an sftp destination: the last segment names it.
+    return target.rstrip("/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+
+
 def parse_snapshots(json_text: str) -> list[Snapshot]:
     """`restic snapshots --json` into dataclasses, newest first."""
     if not json_text.strip():
@@ -852,6 +879,92 @@ def export_only(cfg: config.Config, target: Host) -> str:
         f"cd {composegen.INSTALL_DIR} && sudo docker compose exec -T webserver "
         f"document_exporter /usr/src/paperless/export --no-progress-bar "
         f"--split-manifest{delete_flag}",
+        timeout=7200,
+    )
+
+
+def extract(
+    cfg: config.Config,
+    target: Host,
+    destination: Path,
+    snapshot_id: str = "latest",
+) -> Path:
+    """Stream the documents out of a snapshot into a local directory, in the clear.
+
+    Nothing plaintext is written on the target: `restic dump` produces a tar on
+    stdout, which travels over SSH and is unpacked here. The one unencrypted
+    copy this makes is the operator's, deliberately — which is the whole point
+    of ADR 0018, and why `cli.py` refuses to run it without `--confirm`.
+
+    Not a backup layer, and not a re-importable export: thumbnails and
+    manifests are left out, so what lands is readable files. `restore` is the
+    command that puts an archive back.
+    """
+    if not cfg.backup.is_configured:
+        raise BackupError(
+            "[backup] restic_repository is empty, so there is no snapshot to extract from."
+        )
+    if not SNAPSHOT_ID_PATTERN.match(snapshot_id):
+        raise BackupError(
+            f"{snapshot_id!r} is not a snapshot id. Pass 'latest', or an id as "
+            "`pless backup status` prints it."
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+
+    remote = f"sudo sh -c '. {ENV_FILE} && restic dump --archive tar {snapshot_id} {EXPORT_DIR}'"
+    excludes = [f"--exclude={pattern}" for pattern in EXTRACT_EXCLUDES]
+    # The tar is binary, so it cannot go through sshexec.run, which decodes
+    # stdout as text. A pipe keeps it off disk on the target entirely: what
+    # restic decrypts goes straight into tar and lands only where asked.
+    #
+    # stderr goes to a file rather than a pipe. Nobody reads a pipe until tar
+    # has finished with stdout, so a remote that wrote more than the pipe
+    # buffer would block forever waiting for someone to drain it.
+    with tempfile.TemporaryFile() as errors:
+        stream = subprocess.Popen(
+            sshexec.ssh_command(target.ssh_args, remote),
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        )
+        unpack = subprocess.run(
+            ["tar", "-x", "-C", str(destination), *excludes],
+            stdin=stream.stdout,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if stream.stdout is not None:
+            stream.stdout.close()
+        stream.wait()
+        errors.seek(0)
+        ssh_error = errors.read().decode(errors="replace").strip()
+
+    if stream.returncode != 0:
+        raise BackupError(
+            f"Could not read snapshot {snapshot_id} from the repository: "
+            f"{ssh_error or 'the remote command failed'}"
+        )
+    if unpack.returncode != 0:
+        raise BackupError(f"Unpacking into {destination} failed: {unpack.stderr.strip()}")
+    return destination
+
+
+def forget(cfg: config.Config, target: Host, dry_run: bool = True) -> str:
+    """Apply the retention policy on the target. A dry run unless told otherwise.
+
+    Runs against the key already on the machine. Nothing about where retention
+    runs changes the exposure: that key can delete versions regardless, and
+    what stops it destroying history is Object Lock rather than the absence of
+    a capability (ADR 0017). So this is a deliberate command and never a timer.
+    """
+    policy = RetentionPolicy.from_config(cfg)
+    # Every argument is generated from a validated integer or a module
+    # constant, so there is nothing here to quote.
+    args = " ".join(policy.forget_args())
+    mode = "--dry-run" if dry_run else "--prune"
+    return _run_ok(
+        target,
+        f"sudo sh -c '. {ENV_FILE} && restic forget {args} {mode}'",
         timeout=7200,
     )
 

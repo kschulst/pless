@@ -215,6 +215,41 @@ The restore puts the export tree and the database dump back where they were take
 it is not backing anything up until you do, and a restored machine that never takes a snapshot is
 one failure away from where you started.
 
+### `pless backup extract [--snapshot ID] [--to DIR] --confirm`
+
+Pulls the documents out of a snapshot **in the clear**, onto the machine you run it from.
+Refuses without `--confirm`, and the refusal names the directory it would write to.
+
+This is the one command that puts readable documents on an unencrypted disk, which is why it is
+an escape hatch and an inspection tool and never a backup layer
+([ADR 0018](https://github.com/kschulst/pless/blob/main/adr/0018-no-plaintext-copy-on-the-operators-machine.md)).
+Delete what it produces when you are done with it.
+
+Nothing plaintext is staged on the target: restic writes a tar to standard output, which travels
+over SSH and is unpacked locally. What you get is readable files — thumbnails and Paperless's
+manifests are left out, so it is deliberately **not** a re-importable export. `pless backup
+restore` is the command that puts an archive back.
+
+The default destination is `[paths] local_backups`.
+
+### `pless backup forget [--prune] --confirm`
+
+Applies the retention policy from `[backup]` — `retention_daily`, `retention_weekly`,
+`retention_monthly`, `retention_yearly` — to snapshots tagged `pless`.
+
+**It is a dry run unless you pass `--prune`**, and prints what would be removed. Removing
+anything needs `--prune --confirm` and typing the repository's bucket or directory name, the way
+`pless vm destroy` asks for the VM name.
+
+Never installed on a timer. Retention is a deliberate act, and it runs on the target against the
+key already there: nothing about where it runs changes the exposure, because that key can delete
+versions regardless. What stops it destroying history is Object Lock
+([ADR 0017](https://github.com/kschulst/pless/blob/main/adr/0017-tamper-resistance-in-the-bucket.md)).
+
+Which also means pruning often reclaims nothing. Under Object Lock a delete becomes a delete
+marker, and the data stays until the retention window expires, so an archive under a 30-day lock
+carries roughly a month of churn. That is the price of immutability, not a failure.
+
 ### `pless backup status [--json]`
 
 Repository kind, timer state, snapshot count, the newest snapshot, and how the last run ended.
@@ -299,8 +334,10 @@ Verifies `HCLOUD_TOKEN` with read-only API calls and lists visible servers and l
 
 ## Not built yet
 
-`pless docs upload`, `pless update`, and the backup escape hatches — `pless backup extract`,
-`pless backup mirror` and `pless backup forget` — are planned but do not exist. `extract`
-replaces what earlier drafts called `pless backup download`
-([ADR 0018](https://github.com/kschulst/pless/blob/main/adr/0018-no-plaintext-copy-on-the-operators-machine.md)).
+`pless docs upload`, `pless update` and `pless backup mirror` are planned but do not exist.
+`mirror` is held up by an unresolved question: `restic copy` reads object-storage credentials
+from process-wide environment variables, so one invocation cannot reach two providers with
+different keys — which is the case it exists for. See
+[#2](https://github.com/kschulst/pless/issues/2).
+
 See [Cookbook](../cookbook/index.md) for what to do in the meantime.

@@ -13,6 +13,7 @@ saying nothing, or the wrong thing, does not count as saying yes.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 from click.testing import Result
@@ -163,11 +164,126 @@ class TestVerifyLevels:
         assert "Traceback" not in result.output
 
 
+class TestExtractAsksFirst:
+    def test_without_confirm_it_names_the_destination_and_stops(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[Path] = []
+        monkeypatch.setattr(
+            backup,
+            "extract",
+            lambda cfg, target, destination, snapshot_id="latest": calls.append(destination),
+        )
+        result = invoke(["backup", "extract"])
+
+        assert result.exit_code != 0
+        assert "unencrypted disk" in result.output
+        assert "ADR 0018" in result.output
+        assert calls == []
+
+    def test_with_confirm_it_extracts_where_told(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[tuple[Path, str]] = []
+
+        def extract(cfg, target, destination, snapshot_id="latest"):
+            calls.append((destination, snapshot_id))
+            return destination
+
+        monkeypatch.setattr(backup, "extract", extract)
+        result = invoke(
+            [
+                "backup",
+                "extract",
+                "--to",
+                "/tmp/pless-extract-test",
+                "--snapshot",
+                "42e78445",
+                "--confirm",
+            ]
+        )
+
+        assert result.exit_code == 0, result.output
+        # Resolved, not as typed: the message before --confirm has to name where
+        # plaintext actually lands, and on macOS /tmp is a symlink.
+        assert calls == [(Path("/tmp/pless-extract-test").resolve(), "42e78445")]
+
+    def test_it_says_the_result_is_not_a_re_importable_export(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            backup, "extract", lambda cfg, target, destination, snapshot_id="latest": destination
+        )
+        result = invoke(["backup", "extract", "--confirm"])
+        assert "not a re-importable export" in result.output
+
+
+class TestForgetIsADryRunUntilItIsNot:
+    def _fake_forget(self, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+        calls: list[bool] = []
+
+        def forget(cfg, target, dry_run=True):
+            calls.append(dry_run)
+            return "keep 7 snapshots"
+
+        monkeypatch.setattr(backup, "forget", forget)
+        return calls
+
+    def test_the_default_removes_nothing_and_needs_no_confirmation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._fake_forget(monkeypatch)
+        result = invoke(["backup", "forget"])
+
+        assert result.exit_code == 0, result.output
+        assert calls == [True]
+        assert "Dry run" in result.output
+        assert "--prune --confirm" in result.output
+
+    def test_prune_without_confirm_is_refused(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._fake_forget(monkeypatch)
+        result = invoke(["backup", "forget", "--prune"])
+
+        assert result.exit_code != 0
+        assert "--confirm" in result.output
+        assert calls == []
+
+    def test_the_wrong_repository_name_aborts(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._fake_forget(monkeypatch)
+        result = invoke(
+            ["backup", "forget", "--prune", "--confirm"], user_input="some-other-bucket\n"
+        )
+
+        assert result.exit_code != 0
+        assert "did not match" in result.output
+        assert calls == [], "it pruned after the operator typed the wrong name"
+
+    def test_the_right_repository_name_prunes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._fake_forget(monkeypatch)
+        label = backup.repository_label(_configured().backup.restic_repository)
+        result = invoke(["backup", "forget", "--prune", "--confirm"], user_input=f"{label}\n")
+
+        assert result.exit_code == 0, result.output
+        assert calls == [False]
+
+    def test_it_explains_why_pruning_may_reclaim_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Under Object Lock that is the price of immutability, not a failure."""
+        self._fake_forget(monkeypatch)
+        label = backup.repository_label(_configured().backup.restic_repository)
+        result = invoke(["backup", "forget", "--prune", "--confirm"], user_input=f"{label}\n")
+        assert "reclaims nothing" in result.output
+
+
 class TestTheFakes:
     @pytest.mark.parametrize(
         ("real", "fake"),
         [
             (backup.restore, lambda cfg, target, snapshot_id="latest": 0),
+            (
+                backup.extract,
+                lambda cfg, target, destination, snapshot_id="latest": destination,
+            ),
+            (backup.forget, lambda cfg, target, dry_run=True: ""),
             (
                 drill.verify_full,
                 lambda cfg, secrets, target, snapshot_id="latest", progress=None: None,

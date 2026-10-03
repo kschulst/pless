@@ -35,9 +35,9 @@ more useful than writing instructions that do not work:
   collection today.
 Backup and restore **are** built: `pless backup init` puts snapshots off-site on a timer,
 `pless backup verify` proves the documents come back by restoring them, and `pless backup
-verify --level full` rehearses the whole procedure on a machine built from nothing. The
-[escape hatches](https://github.com/kschulst/pless/issues/2) — `extract`, `mirror` and
-`forget` — are still missing.
+verify --level full` rehearses the whole procedure on a machine built from nothing. `pless backup extract` pulls documents out of a snapshot in the clear when you need them, and
+`pless backup forget` thins history on demand. `pless backup mirror` — copying the repository
+to a second provider — is [still missing](https://github.com/kschulst/pless/issues/2).
 
 Until importing lands, keep your originals where they already are. Treat this archive as a
 searchable index of documents you still hold elsewhere — and note that `pless preflight` will

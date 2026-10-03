@@ -1042,6 +1042,95 @@ def backup_restore(
     )
 
 
+@backup_app.command("extract")
+def backup_extract(
+    snapshot: str = typer.Option(
+        "latest", "--snapshot", help="Snapshot to extract from. Default: the newest."
+    ),
+    to: Path | None = typer.Option(
+        None, "--to", help="Where to write the documents. Default: [paths] local_backups."
+    ),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="Confirm writing readable documents to this disk."
+    ),
+) -> None:
+    """Pull the documents out of a snapshot in the clear, onto this machine."""
+    cfg = config.load_config()
+    target = _host(cfg)
+    destination = (to or cfg.paths.backups).expanduser().resolve()
+
+    if not confirm:
+        _fail(
+            f"This writes readable documents to {destination}, on an unencrypted disk, "
+            "where nothing protects them but the permissions of this machine. It is an "
+            "escape hatch and an inspection tool, never a backup layer — see ADR 0018. "
+            "Run again with --confirm."
+        )
+
+    console.print(f"Extracting from snapshot {snapshot} into {destination}…")
+    try:
+        written = backup.extract(cfg, target, destination, snapshot)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"[green bold]✓ Documents written to {written}.[/green bold]")
+    console.print(
+        "[yellow]•[/yellow] These are readable files, not a re-importable export — "
+        "`pless backup restore` is what puts an archive back. Delete them when you are "
+        "done with them."
+    )
+
+
+@backup_app.command("forget")
+def backup_forget(
+    prune: bool = typer.Option(
+        False, "--prune", help="Actually remove snapshots and reclaim space."
+    ),
+    confirm: bool = typer.Option(False, "--confirm", help="Required with --prune."),
+) -> None:
+    """Apply the retention policy. Shows what would go unless given --prune."""
+    cfg = config.load_config()
+    target = _host(cfg)
+
+    if not cfg.backup.is_configured:
+        _fail("[backup] restic_repository is empty, so there is no history to thin out.")
+
+    if not prune:
+        console.print("Dry run — nothing will be removed.")
+        try:
+            output = backup.forget(cfg, target, dry_run=True)
+        except backup.BackupError as exc:
+            _fail(str(exc))
+            return
+        console.print(output or "Nothing matched the retention policy.")
+        console.print("[yellow]•[/yellow] Run with [bold]--prune --confirm[/bold] to apply it.")
+        return
+
+    if not confirm:
+        _fail("--prune removes snapshots permanently. Run again with --confirm.")
+
+    label = backup.repository_label(cfg.backup.restic_repository)
+    typed = typer.prompt(f"Type the repository name ({label}) to confirm")
+    if typed != label:
+        _fail("The name did not match — aborting.")
+
+    console.print("Applying retention and pruning. This can take a while…")
+    try:
+        output = backup.forget(cfg, target, dry_run=False)
+    except backup.BackupError as exc:
+        _fail(str(exc))
+        return
+    console.print(output)
+    console.print("[green bold]✓ Retention applied.[/green bold]")
+    if cfg.backup.version_retention_days:
+        console.print(
+            f"[yellow]•[/yellow] Under Object Lock, deletes become delete markers and prune "
+            f"reclaims nothing until the {cfg.backup.version_retention_days}-day retention "
+            "expires. That is the price of immutability, not a failure."
+        )
+
+
 @backup_app.command("status")
 def backup_status(
     json_output: bool = typer.Option(False, "--json", help="Machine-readable output."),
