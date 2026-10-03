@@ -257,6 +257,74 @@ Repository kind, timer state, snapshot count, the newest snapshot, and how the l
 An empty repository is reported as a failure rather than as "nothing yet", because a repository
 that was silently recreated looks exactly like success and contains nothing.
 
+## Backblaze B2
+
+Optional, and only a way to *obtain* a bucket. Nothing in the backup path knows that B2 exists —
+`restic_repository` stays a string restic understands, whatever is behind it.
+
+### `pless b2 provision --bucket NAME`
+
+Creates a bucket with Object Lock in governance mode, sets its default retention from
+`[backup] version_retention_days`, and mints a machine key restricted to that bucket.
+
+**Why this is a command and not a documentation page.** Backblaze's web console cannot produce
+the result. A console key marked "Read and Write" comes back holding all 29 capabilities —
+including `bypassGovernance`, the one that defeats Object Lock — and ignores the bucket
+restriction you selected. The create-bucket dialog offers Object Lock as "Compliance mode only",
+while governance is reachable only through the API. Both were confirmed against a real account.
+
+**The refusal is the point.** `provision` reads a provisioning credential and **refuses one that
+itself holds `bypassGovernance`**. Because B2 will not issue capabilities a parent key lacks,
+that refusal makes a dangerous machine key *unobtainable* rather than merely unlikely — it would
+stay unobtainable even if this code were wrong. The master key never reaches `pless`; there is no
+code path here that accepts it.
+
+The credential is prompted, used for the API calls, and written nowhere — not `.env`, not
+`pless.toml`, not argv. Keep it in your password manager.
+
+**You need a provisioning credential first.** One call mints one, and `provision`'s refusal
+prints exactly this when you have the wrong kind:
+
+```sh
+read -r -s -p 'B2 master keyID: ' MK_ID; echo
+read -r -s -p 'B2 master applicationKey: ' MK_KEY; echo
+AUTH=$(curl -sS -u "$MK_ID:$MK_KEY" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
+API=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["apiInfo"]["storageApi"]["apiUrl"])')
+TOK=$(printf '%s' "$AUTH" | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorizationToken"])')
+curl -sS -X POST "$API/b2api/v3/b2_create_key" \
+  -H "Authorization: $TOK" -H 'Content-Type: application/json' \
+  -d '{"accountId":"YOUR_ACCOUNT_ID","keyName":"pless-provisioning","capabilities":["deleteFiles","listBuckets","listFiles","readBucketRetentions","readFiles","writeBucketRetentions","writeFiles","writeKeys"]}'
+unset MK_ID MK_KEY AUTH API TOK
+```
+
+Getting that wrong is safe: `provision` inspects the credential before creating anything, so the
+next run tells you what is missing. That is unlike the bucket, where a wrong answer is invisible
+until the day it matters.
+
+**On success** it prints the `restic_repository` line to copy into `pless.toml`, and the machine
+key **once**. `pless` keeps no copy and Backblaze will not show it again, so put it in your
+password manager before continuing. The key holds exactly `deleteFiles`, `listBuckets`,
+`listFiles`, `readBucketRetentions`, `readFiles` and `writeFiles` — and `provision` fails rather
+than report success if Backblaze returns anything else.
+
+**Run it again and it repairs rather than duplicates.** Object Lock and the retention period are
+set by two separate API calls, so a run interrupted between them leaves a bucket with the lock on
+and nothing retained — which protects nothing and looks like success. Re-running sets the
+retention. `provision` also re-reads the bucket at the end and refuses to report success unless
+Backblaze confirms the retention it asked for.
+
+It will not mint a second machine key unless you pass `--new-key`, because a target may be using
+the first one. It never deletes a bucket or a key.
+
+**What it refuses.** A bucket that exists without Object Lock, because Backblaze does not allow
+the lock to be added afterwards — that bucket can never protect anything. And a bucket in
+compliance mode, because compliance binds you as much as an attacker and whether the mode can be
+changed at all is unverified. In both cases the answer is a different bucket; an empty one costs
+nothing to delete.
+
+The region is never configured and never typed. Backblaze reports the account's own S3 endpoint,
+and `provision` assembles the repository location from it.
+
 ## Access and security
 
 ### `pless tailscale up`
