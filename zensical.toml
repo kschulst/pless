@@ -24,6 +24,7 @@ nav = [
   { "Cookbook" = [
     "cookbook/index.md",
     "cookbook/power-loss.md",
+    "cookbook/backup.md",
     "cookbook/verify-security.md",
     "cookbook/storage.md",
     "cookbook/switch-target.md" ] },
