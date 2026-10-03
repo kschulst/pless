@@ -82,7 +82,21 @@ DAYS_PER_UNIT = {"days": 1, "years": 365}
 
 
 class B2Error(RuntimeError):
-    pass
+    """A refusal, optionally carrying the script that remedies it.
+
+    The remedy is data rather than 36 lines of message text. A verification run
+    made the case: a refusal that printed the bootstrap script inline came to 51
+    lines, and its three load-bearing sentences scrolled away above them.
+
+    `cli.py` writes the script somewhere and prints one line to run; a web
+    interface would render the same field as a download. Neither is this
+    module's business (ADR 0009), and printing it from here would have made the
+    second impossible.
+    """
+
+    def __init__(self, message: str, script: str = "") -> None:
+        super().__init__(message)
+        self.script = script
 
 
 class LockState(StrEnum):
@@ -379,14 +393,7 @@ def bootstrap_key_command(account_id: str) -> str:
     The master key is prompted, used once, and never written. It deliberately
     never reaches pless — there is no code path here that accepts it (ADR 0021).
     """
-    capabilities = sorted({*MACHINE_KEY_CAPABILITIES, *REQUIRED_IN_PROVISIONING_KEY})
-    script = _BOOTSTRAP_SCRIPT % {
-        "api_url": API_URL,
-        "version": API_VERSION,
-        "account_id": account_id,
-        "key_name": PROVISIONING_KEY_NAME,
-        "capabilities": json.dumps(capabilities),
-    }
+    script = bootstrap_key_script(account_id)
     return (
         f"cat > {BOOTSTRAP_SCRIPT_PATH} <<'PLESS_EOF'\n"
         f"{script}"
@@ -395,37 +402,54 @@ def bootstrap_key_command(account_id: str) -> str:
     )
 
 
+def bootstrap_key_script(account_id: str) -> str:
+    """Just the script, for a caller that would rather save it than print it.
+
+    Contains no secret: it prompts for the master key, uses it, and writes
+    nothing. So it is safe to put on disk where the operator can run it.
+    """
+    capabilities = sorted({*MACHINE_KEY_CAPABILITIES, *REQUIRED_IN_PROVISIONING_KEY})
+    return _BOOTSTRAP_SCRIPT % {
+        "api_url": API_URL,
+        "version": API_VERSION,
+        "account_id": account_id,
+        "key_name": PROVISIONING_KEY_NAME,
+        "capabilities": json.dumps(capabilities),
+    }
+
+
 def refuse_provisioning_credential(auth: Authorization) -> None:
     """Stop before anything is created, unless the credential is acceptable.
 
     This is the feature. Without it `provision` would merely *promise* to omit
     `bypassGovernance`, and a promise is what ADR 0017 ruled insufficient.
     """
+    remedy = bootstrap_key_script(auth.account_id)
+
     held = [c for c in FORBIDDEN_IN_PROVISIONING_KEY if c in auth.capabilities]
     if held:
         raise B2Error(
             f"This credential holds {', '.join(held)}, so every key it creates could hold it "
             "too — B2 cannot be asked to withhold what the parent key has. That capability "
             "is the one thing Object Lock protects against, so pless will not use this "
-            "credential.\n\n"
-            "Mint one without it and run this again:\n\n"
-            f"{bootstrap_key_command(auth.account_id)}"
+            "credential. Mint one without it and run this again.",
+            script=remedy,
         )
 
     if auth.is_bucket_restricted:
         raise B2Error(
             f"This credential is restricted to the bucket {auth.bucket_name or auth.bucket_id!r}, "
             "so it cannot create another one. Provisioning needs an account-wide credential "
-            "that still lacks bypassGovernance.\n\n"
-            f"{bootstrap_key_command(auth.account_id)}"
+            "that still lacks bypassGovernance.",
+            script=remedy,
         )
 
     missing = [c for c in REQUIRED_IN_PROVISIONING_KEY if c not in auth.capabilities]
     if missing:
         raise B2Error(
             f"This credential is missing {', '.join(missing)}, so it cannot create a bucket, "
-            "set its retention and mint a key.\n\n"
-            f"{bootstrap_key_command(auth.account_id)}"
+            "set its retention and mint a key.",
+            script=remedy,
         )
 
 
@@ -720,8 +744,9 @@ def provision(
     if state is LockState.UNREADABLE:
         raise B2Error(
             "This credential may not read the bucket's Object Lock configuration, so pless "
-            "cannot confirm what it is about to rely on. Mint a provisioning credential with "
-            f"readBucketRetentions:\n\n{bootstrap_key_command(auth.account_id)}"
+            "cannot confirm what it is about to rely on. Mint a provisioning credential that "
+            "includes readBucketRetentions.",
+            script=bootstrap_key_script(auth.account_id),
         )
     if state is LockState.DISABLED:
         raise B2Error(
