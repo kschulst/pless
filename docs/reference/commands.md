@@ -488,6 +488,47 @@ Recursively classifies a local folder: ready to import, needs conversion (`.enex
 or unsupported. Skips hidden and system files. With `--hashes`, computes SHA-256 and reports
 duplicate content.
 
+### `pless docs upload [PATH] [--dry-run] [--retry-failed] [--batch N] [--json]`
+
+Imports documents into the archive. `PATH` defaults to `[paths] local_documents`.
+
+**Uploading a file is not the same as the archive containing it.** Paperless accepts the file,
+queues it, OCRs it, and may reject it as a duplicate or fail to parse it — minutes or hours later.
+So this command reports the two separately, and never calls an upload a success.
+
+**Run it as often as you like.** It offers what is not done, collects outcomes that have since
+resolved, and stops when there is nothing to do *right now* — not when the import is finished,
+because OCR of a large collection takes days. Running it again is both how you resume after an
+interruption and how you check on progress. There is no second command for either.
+
+What it does not upload: files already in the archive, files byte-identical to another file in the
+same directory (uploaded once), files `pless docs scan` classified as needing conversion, and
+files Paperless has already failed to consume. All four are counted in the summary, so nothing is
+silently dropped. `--retry-failed` offers the last group again.
+
+**A duplicate counts as done.** Paperless rejecting a document it already holds means the archive
+contains it, which is what you asked for.
+
+**The manifest** lives beside `pless.toml` as `pless-import.json` and is keyed by content hash, so
+a file you later move or rename is still recognised as done. It is written after every upload, so
+an interruption costs at most one file's knowledge, and it is the thing that makes resuming work.
+A file you *edit* is new content and is offered again.
+
+**It needs Tailscale up.** Paperless listens on the machine's own interface only
+([ADR 0004](https://github.com/kschulst/pless/blob/main/adr/0004-access-through-tailscale-only.md)),
+so import goes over Tailscale, and `pless` asks the target what it calls itself rather than
+guessing from `[host]`. It also needs `PAPERLESS_API_TOKEN`, which you create in the Paperless UI
+under your user profile — documents are uploaded as that user.
+
+!!! note "Your nightly backup will skip while this runs"
+
+    `pless backup run` refuses to export while Paperless is still consuming, because the exporter
+    requires a quiet queue. During an import the queue is busy for days, so the nightly run
+    **skips** rather than failing — a normal state should not teach you to ignore backup alerts.
+
+    `pless backup status` shows it as a skip. After `[backup] max_busy_skips` consecutive skips it
+    becomes a failure again, so a queue stuck for some other reason does not stay invisible.
+
 ### `pless docs estimate <path> [--local-only]`
 
 Projects disk usage after import, using deliberately pessimistic growth factors. Without
@@ -513,5 +554,5 @@ Verifies `HCLOUD_TOKEN` with read-only API calls and lists visible servers and l
 
 ## Not built yet
 
-`pless docs upload` and `pless update` are planned but do not exist. See
-[Cookbook](../cookbook/index.md) for what to do in the meantime.
+`pless update` is planned but does not exist. See [Cookbook](../cookbook/index.md) for what to
+do in the meantime.

@@ -29,6 +29,7 @@ from pless import (
     hetzner,
     hostfile,
     hostspec,
+    paperless,
     preflight,
     scaffold,
     secretgen,
@@ -305,6 +306,127 @@ def docs_scan(
             )
         else:
             console.print("[green]✓[/green] No duplicate content.")
+
+
+@docs_app.command("upload")
+def docs_upload(
+    path: Path | None = typer.Argument(
+        None, exists=True, file_okay=False, help="Directory to import. Default: [paths] documents."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show the plan and upload nothing."),
+    retry_failed: bool = typer.Option(
+        False, "--retry-failed", help="Offer files Paperless has already failed to consume."
+    ),
+    batch: int = typer.Option(
+        paperless.DEFAULT_BATCH, "--batch", help="How many uploads before collecting outcomes."
+    ),
+    wait: int = typer.Option(
+        paperless.DEFAULT_POLL_BUDGET_SECONDS,
+        "--wait",
+        help="Seconds to wait for outcomes before leaving the rest recorded. 0 returns at once.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable summary."),
+) -> None:
+    """Import documents into the archive, and say where each one got to."""
+    cfg = config.load_config()
+    root = (path or cfg.paths.documents).expanduser()
+    if not root.is_dir():
+        _fail(f"{root} is not a directory. Pass a path, or set \\[paths] local_documents.")
+
+    manifest_file = paperless.manifest_path(config.find_config_file())
+    try:
+        manifest = paperless.load_manifest(manifest_file)
+    except paperless.PaperlessError as exc:
+        _fail(str(exc))
+        return
+
+    # Hashes are not optional here: the manifest is keyed by content, so a file
+    # the operator later moves is still recognised as done.
+    console.print(f"Scanning {root}…")
+    scan = docscan.scan(root, with_hashes=True)
+    plan = paperless.plan_import(scan, manifest, retry_failed)
+
+    console.print(
+        f"{len(plan.to_upload)} to upload, {len(plan.to_poll)} already uploaded and still being "
+        f"worked on, {plan.already_done} already in the archive."
+    )
+    for label, entries in (
+        ("byte-identical to another file here", plan.local_duplicates),
+        ("need conversion first", plan.needs_conversion),
+        ("unsupported", plan.unsupported),
+    ):
+        if entries:
+            console.print(f"[yellow]•[/yellow] {len(entries)} {label}, and will not be uploaded.")
+
+    if dry_run:
+        console.print("\nDry run — nothing was uploaded.")
+        return
+    if not plan.has_work:
+        console.print("[green]✓[/green] Nothing to do.")
+        return
+
+    target = _host(cfg)
+    try:
+        base = paperless.base_url(tailscale.status(target).hostname)
+    except (paperless.PaperlessError, tailscale.TailscaleError) as exc:
+        _fail(str(exc))
+        return
+
+    sec = config.load_secrets()
+    if not sec.paperless_api_token:
+        _fail(
+            "PAPERLESS_API_TOKEN is not set. Create a token in the Paperless UI under your "
+            "user profile, and put it in .env — import uploads as that user."
+        )
+
+    console.print(f"Uploading to {base}. Paperless consumes in the background…\n")
+    try:
+        progress = paperless.run_import(
+            base,
+            sec.paperless_api_token,
+            scan,
+            manifest,
+            manifest_file,
+            paperless.http_transport(),
+            batch=batch,
+            poll_budget=wait,
+            retry_failed=retry_failed,
+            progress=lambda message: console.print(f"  {message}"),
+        )
+    except paperless.PaperlessError as exc:
+        _fail(str(exc))
+        return
+
+    if json_output:
+        console.print_json(
+            data={
+                "in_archive": progress.in_archive,
+                "succeeded": progress.succeeded,
+                "duplicate": progress.duplicate,
+                "failed": progress.failed,
+                "pending": progress.pending,
+                "manifest": str(manifest_file),
+            }
+        )
+        return
+
+    # Uploaded and consumed are reported separately because they diverge by
+    # hours, and one number would imply they do not.
+    console.print(
+        f"\n[green bold]✓ {progress.in_archive} document(s) in the archive[/green bold] "
+        f"({progress.succeeded} consumed, {progress.duplicate} already there)."
+    )
+    if progress.pending:
+        console.print(
+            f"[yellow]•[/yellow] {progress.pending} still being worked on. Run this again to "
+            "collect them — nothing is lost in the meantime."
+        )
+    if progress.failed:
+        console.print(
+            f"[red]✗[/red] {progress.failed} could not be consumed. They are recorded and will "
+            "not be retried unless you pass --retry-failed."
+        )
+    console.print(f"Manifest: {manifest_file}")
 
 
 @docs_app.command("estimate")
@@ -1073,7 +1195,7 @@ def backup_run() -> None:
         return
 
     match record.outcome:
-        case backup.RunOutcome.SKIPPED_LOCKED:
+        case backup.RunOutcome.SKIPPED_LOCKED | backup.RunOutcome.SKIPPED_BUSY:
             console.print(f"[yellow]•[/yellow] Skipped: {record.detail}")
         case backup.RunOutcome.SUCCEEDED:
             console.print(
@@ -1414,6 +1536,11 @@ def backup_status(
         console.print(
             f"[green]✓[/green] Last run {record.finished_at}: "
             f"{record.documents_exported} documents, snapshot {record.snapshot_id[:8]}."
+        )
+    elif record.skipped:
+        console.print(
+            f"[yellow]•[/yellow] Last run {record.finished_at or '(unfinished)'} was skipped: "
+            f"{record.detail}"
         )
     else:
         console.print(

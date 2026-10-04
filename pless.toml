@@ -59,6 +59,12 @@ verify_max_age_days = 14        # older than this and preflight says "not verifi
 
 quiescence_timeout_seconds = 900  # how long to wait for the task queue to drain
 
+# A busy task queue is a skip rather than a failure, because an import keeps it busy
+# for days and a nightly failure teaches you to ignore backup alerts. Past this many
+# consecutive skips it becomes a failure again, so a queue stuck for some other reason
+# does not stay invisible.
+max_busy_skips = 7
+
 # How much history survives `pless backup forget --prune`, which is a manual,
 # deliberate act and never runs on a timer.
 retention_daily = 7
