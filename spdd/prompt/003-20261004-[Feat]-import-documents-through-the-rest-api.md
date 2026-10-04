@@ -230,11 +230,25 @@ renames is still recognised as done. `path` is carried for the operator's benefi
    - An unknown `version` raises with a message naming the version it found.
 4. `UploadRecord.is_done` → `outcome in (SUCCEEDED, DUPLICATE)`.
 5. `classify_task(payload: dict) -> tuple[Outcome, str]`:
-   - Reads Paperless's task representation: `status` (`SUCCESS`, `FAILURE`, `PENDING`, `STARTED`)
-     and `result`.
-   - A `FAILURE` whose result mentions an existing document is `DUPLICATE`, not `FAILED` — the
-     archive contains the document, which is what the operator asked for.
-   - An unrecognised status is `PENDING`, never a success. Silence is not consumption.
+
+   !!! note "Verified against v2.20.15 before writing it"
+
+       `TasksViewSerializer` exposes `id`, `task_id`, `task_name`, `task_file_name`,
+       `date_created`, `date_done`, `type`, `status`, `result`, `acknowledged`,
+       `related_document` and `owner`. `status` carries Celery's own state constants.
+
+       **`related_document` is the duplicate signal**, not the `result` string. It is a
+       `SerializerMethodField` that extracts a document id from the result, and it is populated
+       *"when creation succeeds or duplicate scenarios occur"*. So Paperless already does the
+       regex this canvas was going to ask us to repeat — badly, and separately, against a
+       message string that is free to change.
+
+   - `status == "SUCCESS"` → `SUCCEEDED`.
+   - `status == "FAILURE"` **with** a `related_document` → `DUPLICATE`. The archive holds the
+     document, which is what the operator asked for.
+   - `status == "FAILURE"` **without** one → `FAILED`.
+   - Anything else — `PENDING`, `STARTED`, `RETRY`, or a value this code has never seen — is
+     `PENDING`. An unrecognised status is never a success: silence is not consumption.
 6. `plan_import(scan: ScanResult, manifest: Manifest, retry_failed: bool = False) -> ImportPlan`:
    - `to_upload`: supported files whose record is absent, or `FAILED` with `retry_failed`.
    - `to_poll`: records with `PENDING`.
@@ -264,10 +278,26 @@ renames is still recognised as done. `path` is carried for the operator's benefi
 2. `upload_file(base, token, entry, transport) -> str`:
    - Multipart `POST`, returns the task id. A response carrying no task id raises, because a file
      whose task is unknown can never be followed up.
-3. `poll_task(base, token, task_id, transport) -> tuple[Outcome, str]`:
-   - A task id Paperless no longer knows is `PENDING` with a detail saying so, **not** `FAILED`:
-     Paperless prunes its task list, and re-uploading on that basis would duplicate a document
-     already in the archive.
+3. `poll_tasks(base, token, task_ids, transport) -> dict[str, tuple[Outcome, str]]`:
+
+   !!! note "Corrected against v2.20.15"
+
+       An earlier draft of the safeguards said polling would be "batched by task id". It cannot
+       be: `TasksViewSet.get_queryset` reads a **single** `task_id` query parameter, so
+       `?task_id=` is one request per task.
+
+       But the unfiltered list is paginated and ordered `-date_created`, so one request returns
+       a page of recent tasks that can be matched against the manifest locally. That is the
+       batching — pages of the list, not a multi-id filter — and it is fewer requests than the
+       filter would have been anyway.
+
+   - Fetch pages of `/api/tasks/` newest-first, matching `task_id` against the ids asked for,
+     until every id is found or the pages run out.
+   - An id the pages do not reach is retried once with `?task_id=<id>`, for the case of a task
+     old enough to have fallen behind the pages but not yet pruned.
+   - An id Paperless genuinely no longer knows is `PENDING` with a detail saying so, **not**
+     `FAILED`: Paperless prunes its task list, and re-uploading on that basis would duplicate a
+     document already in the archive.
 4. `run_import(cfg, token, base, scan, manifest, transport, batch, poll_budget, retry_failed,
    progress) -> ImportProgress`:
    - Logic, in order:
@@ -362,8 +392,10 @@ renames is still recognised as done. `path` is carried for the operator's benefi
 4. **Fakes carry the signatures they stand in for**, held by a `TestTheFakes` class, following
    `test_drill.py`, `test_b2_provision.py` and `test_cli_preflight.py`.
 5. **Verify response shapes against the pinned version.** `[paperless] version` is exact for a
-   reason. The task representation and the upload response must be confirmed against it, not
-   assumed — the B2 work was bitten twice by inference.
+   reason, and this was done before the code was written rather than after: `post_document`
+   returns `Response(async_task.id)` — a bare Celery UUID, not `"OK"` — and the duplicate signal
+   is the serialiser's `related_document` field rather than the `result` string. Both were read
+   from the source at `v2.20.15`. The B2 work was bitten twice by inferring instead.
 6. **Silence is never success.** An unknown task status is pending; a forgotten task is pending; a
    malformed manifest raises. Every ambiguous answer resolves to "not done".
 7. **The manifest is written atomically** — a temporary file and a rename — because a half-written
@@ -389,7 +421,9 @@ renames is still recognised as done. `path` is carried for the operator's benefi
    - At most `batch` uploads in flight, defaulting to 4.
    - One invocation polls for at most `poll_budget` seconds, defaulting to 300, and then leaves the
      rest in the manifest. It does not wait for an import to finish, because an import takes days.
-   - Task polling is batched by task id rather than one request per document per round.
+   - Task polling reads pages of `/api/tasks/` and matches locally, rather than one request
+     per document per round. `?task_id=` accepts only one id, so it is the fallback for a task
+     that has fallen behind the pages, not the primary path.
    - The upload timeout is per file and generous; the poll timeout is short.
 3. **Security constraints**:
    - The API token appears in no argv, no log, no error message and no `__repr__`.
@@ -424,8 +458,9 @@ renames is still recognised as done. `path` is carried for the operator's benefi
    - A drill needs a corpus with duplicates, a deliberately corrupt file, and enough volume to see
      throughput — so it takes hours rather than minutes, and must run on a real target with
      Paperless deployed.
-   - It must confirm the two things only reality can: the shape of the upload response and of the
-     task representation at the pinned Paperless version.
+   - The upload response and the task representation were read from the source at `v2.20.15`
+     rather than inferred, so what a drill must confirm is narrower: that a *real* duplicate
+     populates `related_document`, and that a *real* parse failure does not.
    - It must also confirm the backup interaction — that a nightly run during an import skips
      calmly, and that the counter eventually turns it into a failure.
    - Throughput measured there is what decides whether the rsync bulk path in
