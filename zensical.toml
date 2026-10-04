@@ -25,6 +25,7 @@ nav = [
     "cookbook/index.md",
     "cookbook/power-loss.md",
     "cookbook/backup.md",
+    "cookbook/importing.md",
     "cookbook/verify-security.md",
     "cookbook/storage.md",
     "cookbook/switch-target.md" ] },

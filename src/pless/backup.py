@@ -107,6 +107,8 @@ class RunOutcome(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED_LOCKED = "skipped-locked"
+    # The queue was busy, which during an import is normal and lasts days.
+    SKIPPED_BUSY = "skipped-busy"
 
 
 @dataclass
@@ -136,11 +138,20 @@ class BackupRun:
     snapshot_id: str = ""
     documents_exported: int = 0
     queue_moved_during_run: bool = False
+    # How many consecutive runs have been skipped for a busy queue. The script
+    # carries it forward so a queue stuck for a reason other than an import
+    # eventually becomes a failure rather than staying invisible.
+    busy_skips: int = 0
     detail: str = ""
 
     @property
     def succeeded(self) -> bool:
         return self.outcome is RunOutcome.SUCCEEDED
+
+    @property
+    def skipped(self) -> bool:
+        """A locked volume or a busy queue. Normal states, not failures."""
+        return self.outcome in (RunOutcome.SKIPPED_LOCKED, RunOutcome.SKIPPED_BUSY)
 
     @classmethod
     def from_json(cls, text: str) -> BackupRun:
@@ -162,6 +173,7 @@ class BackupRun:
             snapshot_id=str(data.get("snapshot_id", "")),
             documents_exported=int(data.get("documents_exported", 0) or 0),
             queue_moved_during_run=bool(data.get("queue_moved_during_run", False)),
+            busy_skips=int(data.get("busy_skips", 0) or 0),
             detail=str(data.get("detail", "")),
         )
 
@@ -398,6 +410,16 @@ STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 SNAPSHOT_ID=""
 DOCUMENTS=0
 QUEUE_MOVED=false
+MAX_BUSY_SKIPS={cfg.backup.max_busy_skips}
+
+# Carried forward from the previous record, so consecutive busy skips add up. A
+# run that gets past the queue resets it, which is why it is read before the new
+# record is written and zeroed on success.
+BUSY_SKIPS=$(grep -o '"busy_skips"[^0-9]*[0-9][0-9]*' "$RECORD" 2>/dev/null \
+  | grep -o '[0-9][0-9]*' | tail -1)
+# Empty when the record is absent or predates the field, and `[ "" -lt 7 ]` is
+# an error rather than a false.
+[ -n "$BUSY_SKIPS" ] || BUSY_SKIPS=0
 
 log() {{ echo "pless-backup: $*" >&2; }}
 
@@ -412,6 +434,7 @@ write_record() {{
   "snapshot_id": "$SNAPSHOT_ID",
   "documents_exported": $DOCUMENTS,
   "queue_moved_during_run": $QUEUE_MOVED,
+  "busy_skips": $BUSY_SKIPS,
   "detail": "$2"
 }}
 RECORD_EOF
@@ -469,11 +492,26 @@ while [ "$WAITED" -lt "$QUIESCENCE_TIMEOUT" ]; do
 done
 
 if [ "$DRAINED" -lt 2 ]; then
-  log "the queue did not drain within ${{QUIESCENCE_TIMEOUT}}s — not exporting."
-  write_record failed "The task queue did not drain within ${{QUIESCENCE_TIMEOUT}}s. \
-The exporter requires that nothing is being consumed, so nothing was exported."
+  BUSY_SKIPS=$((BUSY_SKIPS + 1))
+  if [ "$BUSY_SKIPS" -lt "$MAX_BUSY_SKIPS" ]; then
+    # Normal during an import, which keeps the queue busy for days. A failure
+    # every night would teach the operator to ignore backup alerts, which is
+    # the same reasoning the locked-volume skip rests on.
+    log "the queue is busy — skipping (${{BUSY_SKIPS}} in a row)."
+    write_record skipped-busy "Paperless was still consuming after \
+${{QUIESCENCE_TIMEOUT}}s, so nothing was exported. An import in progress is the usual reason. \
+Skipped ${{BUSY_SKIPS}} run(s) in a row."
+    exit "$EXIT_SKIPPED"
+  fi
+  log "the queue has been busy for ${{BUSY_SKIPS}} runs — failing."
+  write_record failed "The task queue has been busy for ${{BUSY_SKIPS}} consecutive runs, so \
+nothing has been exported in that time. If no import is running, something is stuck — see \
+pless backup status, and journalctl -u pless-backup.service on the target."
   exit 1
 fi
+
+# Past the queue, so whatever was keeping it busy is done.
+BUSY_SKIPS=0
 
 STEP="dumping the database"
 log "$STEP"
@@ -882,6 +920,11 @@ def run(target: Host, timeout: int = 21600) -> BackupRun:
     """
     result = _run(target, f"sudo sh {SCRIPT_PATH}", timeout=timeout)
     if result.exit_code == EXIT_SKIPPED:
+        # Two things exit this way now — a locked volume and a busy queue — so
+        # the record says which, and only a missing record falls back.
+        skipped = read_run_record(target)
+        if skipped is not None and skipped.skipped:
+            return skipped
         return BackupRun(
             outcome=RunOutcome.SKIPPED_LOCKED,
             detail="The encrypted volume is not mounted. Run `pless unlock` and try again.",

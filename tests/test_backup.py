@@ -546,3 +546,170 @@ class TestTheCredentialNamingBoundary:
         )
         assert "B2_ACCOUNT_ID=" in rendered
         assert "B2_KEY_ID=" not in rendered
+
+
+def _extraction_lines(script: str) -> str:
+    """The counter-reading lines of the rendered script, whole.
+
+    By line, not by substring offset: slicing on the first "BUSY_SKIPS=0" ends
+    inside `[ -n "$BUSY_SKIPS" ] || BUSY_SKIPS=0` and hands the shell half a
+    command — which is its own small lesson about testing generated shell.
+    """
+    lines = script.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("BUSY_SKIPS=$(grep"))
+    last = next(i for i, line in enumerate(lines) if line.startswith('[ -n "$BUSY_SKIPS" ]'))
+    return "\n".join(lines[first : last + 1])
+
+
+def _a_written_record(**fields: object) -> str:
+    """A run record in the shape the rendered script writes.
+
+    Built here rather than from `BackupRun`, because `BackupRun` only ever
+    *reads* one — the script is what writes it, and a test that generated the
+    JSON from the parser could not catch the two drifting apart.
+    """
+    record = {
+        "started_at": "2026-10-04T02:00:00Z",
+        "finished_at": "2026-10-04T02:15:00Z",
+        "outcome": "skipped-busy",
+        "snapshot_id": "",
+        "documents_exported": 0,
+        "queue_moved_during_run": False,
+        "busy_skips": 0,
+        "detail": "Paperless was still consuming.",
+    }
+    record.update(fields)
+    return json.dumps(record, indent=2)
+
+
+class TestABusyQueueIsASkip:
+    """A busy task queue used to write a *failed* record and exit non-zero.
+
+    That is correct for a queue stuck by accident and wrong for the ordinary
+    case: an import keeps the queue busy for days, so the nightly run would fail
+    every night for as long as the import ran — and a backup alert that fires
+    during normal operation is an alert nobody reads. So it became a skip, in
+    the same shape the locked volume already had.
+
+    With a boundary, because the reasoning cuts both ways: a queue that is busy
+    for a week is no longer explained by an import, and silence then would be
+    the worse failure.
+    """
+
+    def test_a_busy_queue_exits_as_a_skip(self) -> None:
+        script = backup.render_script(a_config())
+        assert "write_record skipped-busy" in script
+        assert 'exit "$EXIT_SKIPPED"' in script
+
+    def test_the_threshold_is_configurable(self) -> None:
+        assert "MAX_BUSY_SKIPS=3" in backup.render_script(a_config(max_busy_skips=3))
+
+    def test_the_record_carries_the_count(self) -> None:
+        assert '"busy_skips": $BUSY_SKIPS' in backup.render_script(a_config())
+
+    def test_passing_the_queue_resets_the_count(self) -> None:
+        """Otherwise a single busy night would eventually fail a healthy
+        machine, which is the opposite of the point."""
+        script = backup.render_script(a_config())
+        quiescence = script.index("DRAINED")
+        assert "BUSY_SKIPS=0" in script[quiescence:]
+
+    def test_the_failure_message_says_how_to_look(self) -> None:
+        script = backup.render_script(a_config())
+        assert "pless backup status" in script
+
+    def test_no_backticks_survive_into_the_message(self) -> None:
+        """Backticks inside a double-quoted shell string are command
+        substitution. A message that read ``see `pless backup status` `` would
+        run it on the target and bury the result in the record."""
+        script = backup.render_script(a_config())
+        busy = script[script.index("BUSY_SKIPS=$((") :]
+        assert "`" not in busy[: busy.index("exit 1")]
+
+    # --- The arithmetic, executed rather than read ------------------------
+    #
+    # `sh -n` says a line parses, not that it means anything: three attempts at
+    # the audit collector passed it while producing invalid JSON. The counter is
+    # read out of a JSON record by a grep pipeline, which is exactly that kind
+    # of line, so these tests run it.
+
+    def _extracted_count(self, record_json: str, tmp_path: Path) -> str:
+        """Run the real extraction from the rendered script against a record."""
+        extraction = _extraction_lines(backup.render_script(a_config()))
+        record = tmp_path / "run.json"
+        record.write_text(record_json)
+        result = subprocess.run(
+            ["sh", "-c", f'RECORD="{record}"\n{extraction}\nprintf %s "$BUSY_SKIPS"'],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    def test_it_reads_the_count_out_of_a_real_record(self, tmp_path: Path) -> None:
+        assert self._extracted_count(_a_written_record(busy_skips=4), tmp_path) == "4"
+
+    def test_a_record_without_the_field_reads_as_zero(self, tmp_path: Path) -> None:
+        """Every record written before this existed. Reading one must not make
+        the counter empty, because `[ "" -lt 7 ]` is an error, not a false."""
+        assert self._extracted_count('{"outcome": "succeeded"}', tmp_path) == "0"
+
+    def test_a_missing_record_reads_as_zero(self, tmp_path: Path) -> None:
+        extraction = _extraction_lines(backup.render_script(a_config()))
+        result = subprocess.run(
+            [
+                "sh",
+                "-c",
+                f'RECORD="{tmp_path}/absent.json"\n{extraction}\nprintf %s "$BUSY_SKIPS"',
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0 and result.stdout == "0"
+
+    def test_it_does_not_pick_up_a_neighbouring_number(self, tmp_path: Path) -> None:
+        """`documents_exported` sits in the same record and is also a number
+        following a quoted key. A pipeline that matched loosely would read it."""
+        written = _a_written_record(busy_skips=2, documents_exported=1234)
+        assert self._extracted_count(written, tmp_path) == "2"
+
+    @pytest.mark.parametrize(
+        ("count", "maximum", "skips"),
+        [(1, 7, True), (6, 7, True), (7, 7, False), (8, 7, False), (1, 1, False)],
+    )
+    def test_the_boundary_decides_skip_or_fail(self, count: int, maximum: int, skips: bool) -> None:
+        """The comparison itself, run under sh. An off-by-one here is the
+        difference between a failure on the seventh night and never."""
+        result = subprocess.run(
+            ["sh", "-c", f"[ {count} -lt {maximum} ] && echo skip || echo fail"],
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == ("skip" if skips else "fail")
+
+
+class TestASkipIsNotAFailure:
+    def test_both_skip_reasons_report_as_skipped(self) -> None:
+        for outcome in (backup.RunOutcome.SKIPPED_LOCKED, backup.RunOutcome.SKIPPED_BUSY):
+            assert backup.BackupRun(outcome=outcome).skipped
+            assert not backup.BackupRun(outcome=outcome).succeeded
+
+    def test_a_failure_is_not_a_skip(self) -> None:
+        assert not backup.BackupRun(outcome=backup.RunOutcome.FAILED).skipped
+
+    def test_the_count_round_trips(self) -> None:
+        assert backup.BackupRun.from_json(_a_written_record(busy_skips=3)).busy_skips == 3
+
+    def test_the_script_writes_every_field_python_reads(self) -> None:
+        """The contract that can actually break, and in only one direction: the
+        script writes the record and Python parses it, so a field added to one
+        and not the other is a silent zero. `busy_skips` is the newest, and the
+        reason this test exists."""
+        script = backup.render_script(a_config())
+        heredoc = script[script.index('cat > "$RECORD"') :]
+        heredoc = heredoc[: heredoc.index("RECORD_EOF", 20)]
+        for field in backup.BackupRun.__dataclass_fields__:
+            assert f'"{field}"' in heredoc, field
+
+    def test_an_old_record_reads_as_no_skips(self) -> None:
+        assert backup.BackupRun.from_json('{"outcome": "succeeded"}').busy_skips == 0

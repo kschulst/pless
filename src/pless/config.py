@@ -168,6 +168,12 @@ class BackupConfig(BaseModel):
 
     quiescence_timeout_seconds: int = 900  # how long to wait for the task queue to drain
 
+    # A busy queue is a skip rather than a failure, because an import keeps it
+    # busy for days and a nightly failure teaches you to ignore backup alerts.
+    # Past this many consecutive skips it becomes a failure again, so a queue
+    # stuck for some other reason does not stay invisible.
+    max_busy_skips: int = 7
+
     retention_daily: int = 7
     retention_weekly: int = 8
     retention_monthly: int = 12
