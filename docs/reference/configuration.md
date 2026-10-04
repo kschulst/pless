@@ -228,6 +228,11 @@ long as restic supports it.
 The timer is `Persistent=true`, so a machine that was asleep at the scheduled time backs up when
 it wakes.
 
+**`max_busy_skips`** bounds how long a busy task queue is treated as normal. The exporter needs a
+quiet queue, and an import keeps it busy for days — so a busy queue is a *skip* rather than a
+failure, because a nightly failure teaches you to ignore backup alerts. Past this many consecutive
+skips it becomes a failure again, so a queue stuck for some other reason does not stay invisible.
+
 **Retention** is applied by `pless backup forget`, which is a manual, deliberate act and never
 runs on a timer. The four `retention_*` keys map to restic's `--keep-daily`, `--keep-weekly`,
 `--keep-monthly` and `--keep-yearly`.

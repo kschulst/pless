@@ -29,6 +29,11 @@ timer is running, the last run succeeded, and a restore has been verified recent
 silently recreated looks exactly like success and contains nothing. The command says so in
 those words rather than reporting zero.
 
+**A skipped run is not a failed one.** Two things skip calmly: a locked volume, which is the
+normal state after a reboot, and a busy task queue, which is the normal state during an import.
+`status` shows both as skips. A queue that stays busy for `[backup] max_busy_skips` runs becomes a
+failure, because by then an import is no longer the likely explanation.
+
 **A verification that has expired counts as none.** `[backup] verify_max_age_days` decides
 how long one is worth; past that, `pless preflight` goes back to amber. That is intended — a
 restore proven eleven months ago proves little about a repository written to every day since.

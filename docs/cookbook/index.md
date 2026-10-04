@@ -19,26 +19,34 @@ them.
 
     Running out of room, or moving from an SD card to an SSD, without losing the archive.
 
+-   :material-file-import: **[Importing a collection](importing.md)**
+
+    Getting your documents into the archive: what to expect of throughput, why the first run
+    does not finish, and what a failed document means.
+
 -   :material-swap-horizontal: **[Switch target](switch-target.md)**
 
     Rehearsing on a VM before touching real hardware, and moving between Pi, VM and cloud.
 
 </div>
 
-## Recipes that do not exist yet
+## What is still missing
 
-Two obvious ones are missing because the features are missing. Being straight about that is
-more useful than writing instructions that do not work:
+Being straight about this is more useful than writing instructions that do not work. Everything
+in the grid above is built and drilled. What is not:
 
-- **[Importing your documents](https://github.com/kschulst/pless/issues/1)** — not built.
-  `pless docs scan` and `pless docs estimate` already work, so you can survey and size your
-  collection today.
-Backup and restore **are** built: `pless backup init` puts snapshots off-site on a timer,
-`pless backup verify` proves the documents come back by restoring them, and `pless backup
-verify --level full` rehearses the whole procedure on a machine built from nothing. `pless backup extract` pulls documents out of a snapshot in the clear when you need them, and
-`pless backup forget` thins history on demand. `pless backup mirror` — copying the repository
-to a second provider — is [still missing](https://github.com/kschulst/pless/issues/2).
+- **Updating Paperless in place** — [not built](https://github.com/kschulst/pless/issues/6).
+  Image tags are pinned deliberately, so an upgrade is a decision you make by editing
+  `pless.toml` and redeploying, not something that happens overnight.
 
-Until importing lands, keep your originals where they already are. Treat this archive as a
-searchable index of documents you still hold elsewhere — and note that `pless preflight` will
-tell you the same thing, in as many words.
+Import, backup, restore and the rehearsal **are** built. `pless docs upload` brings a collection
+in; `pless backup init` puts snapshots off-site on a timer; `pless backup verify` proves the
+documents come back by restoring them, and `--level full` rehearses the whole procedure on a
+machine built from nothing. `pless backup extract` pulls documents out of a snapshot in the clear,
+`pless backup forget` thins history, and `pless backup mirror` copies the repository to a second
+repository so one provider is not a single point of failure.
+
+**Keep your originals until a backup has included them.** Import reads your files and never moves
+or deletes them, so this costs you nothing but patience: `pless backup status` tells you when the
+archive has an off-site copy of what you have just added. `pless preflight` says the same thing, in
+as many words, before you start.

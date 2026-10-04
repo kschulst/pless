@@ -298,6 +298,10 @@ renames is still recognised as done. `path` is carried for the operator's benefi
    - An id Paperless genuinely no longer knows is `PENDING` with a detail saying so, **not**
      `FAILED`: Paperless prunes its task list, and re-uploading on that basis would duplicate a
      document already in the archive.
+   - **That detail is written to the record even though the outcome stays pending.** It is the
+     only thing distinguishing "still being worked on" from "Paperless has forgotten this, and we
+     are deliberately not re-uploading it" — which is exactly what an operator looking at a stuck
+     entry needs to know. A pending outcome is not a reason to record nothing.
 4. `run_import(cfg, token, base, scan, manifest, transport, batch, poll_budget, retry_failed,
    progress) -> ImportProgress`:
    - Logic, in order:
@@ -306,8 +310,12 @@ renames is still recognised as done. `path` is carried for the operator's benefi
        the summary accounts for them without an upload.
      - Upload in batches of `batch`, writing the manifest after **each** upload, so an interruption
        loses at most one file's knowledge.
-     - Poll `to_poll` plus the newly uploaded, in rounds of `POLL_INTERVAL_SECONDS`, until
-       everything is done or `poll_budget` is spent. Write the manifest after each round.
+     - **Collect once unconditionally**, before any waiting. An import smaller than `batch`
+       would otherwise never ask, and report everything as pending even when Paperless had
+       already finished — telling the operator to run it again for no reason.
+     - Then poll `to_poll` plus the newly uploaded, in rounds of `POLL_INTERVAL_SECONDS`, until
+       everything is done or `poll_budget` is spent. Write the manifest after each round, so
+       `poll_budget=0` means "collect once and do not wait" rather than "learn nothing".
      - Return `summarise(manifest)`.
    - Constraints: never writes, moves or deletes a local file; never deletes a manifest entry;
      the token appears in no return value, no log and no error.
@@ -336,10 +344,14 @@ renames is still recognised as done. `path` is carried for the operator's benefi
 
 ### Create the CLI surface — `cli.py`
 
-1. `pless docs upload [PATH] [--dry-run] [--retry-failed] [--batch N] [--json]`:
+1. `pless docs upload [PATH] [--dry-run] [--retry-failed] [--batch N] [--wait S] [--json]`:
    - `PATH` defaults to `[paths] local_documents`.
    - Scans with hashes — required, since the manifest is keyed by content.
    - `--dry-run` prints the plan and makes no request.
+   - `--wait S` is the poll budget, defaulting to `DEFAULT_POLL_BUDGET_SECONDS`. `--wait 0`
+     collects what has already resolved and returns immediately, which is what someone checking
+     on a long import wants — and what a test needs, since the alternative is a suite that
+     sleeps.
    - Prints a running count of uploaded and consumed **separately**, because they diverge by hours
      and a single number would imply they do not.
    - On finishing, prints the summary: in the archive, already there, still being worked on,
