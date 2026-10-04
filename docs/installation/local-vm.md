@@ -66,6 +66,15 @@ pless audit
 pless tunnel                    # http://localhost:8000
 ```
 
+Backup rehearses here too, and a VM is the right place to find out that you had the restic
+password wrong:
+
+```bash
+pless backup init               # a local repository is fine for a rehearsal
+pless backup run
+pless backup verify             # restore it and check the documents came back
+```
+
 On the Lima backend the VM gets no cloud-init, so `pless bootstrap` does the provisioning —
 exactly as it will on your Pi. On Multipass, cloud-init has already applied the same host
 spec at boot, mirroring how a cloud server comes up; running `bootstrap` anyway is harmless
@@ -92,7 +101,18 @@ media, actual power-loss and boot-order behaviour, Pi-specific kernel or PCIe is
 long OCR really takes on the hardware you bought.
 
 For everything else — the commands, the LUKS flow, the compose stack, the firewall, the
-audit — it is the real thing.
+audit, backup and restore — it is the real thing.
+
+!!! tip "The full rehearsal builds its own VM"
+
+    `pless backup verify --level full` does not use the VM you created here. It builds a
+    *second* throwaway machine from nothing, bootstraps it, restores the backup into it and
+    checks the documents came back — which is the only test that also rehearses the procedure
+    rather than just the data. It needs a backend installed, which is why this page is where it
+    gets mentioned.
+
+    A failed rehearsal deliberately leaves its VM standing, so you can look at what went
+    wrong. Destroy it yourself when you are done with it.
 
 ## Clean up
 

@@ -167,6 +167,40 @@ pless tunnel   # then browse to http://localhost:8000
 
 Log in as the admin user from `pless.toml` with `PAPERLESS_ADMIN_PASSWORD` from `.env`.
 
+## 9. Back it up, before putting anything in it
+
+An encrypted archive on one SD card in one building is not a safe place for your documents. A
+flood, a theft or a dead card loses all of it.
+
+```bash
+pless b2 provision --bucket <name>   # a bucket whose versions cannot be destroyed
+pless backup init                    # nightly snapshots, off-site
+pless backup verify                  # restore one and check the documents came back
+```
+
+`verify` is the step that matters. It restores from the snapshot and compares what came back,
+because a backup nobody has restored is a belief rather than a backup — and `pless preflight`
+withholds its green light until one has been performed.
+
+See [Backup and restore](../cookbook/backup.md) for what each command does and how the bucket
+resists a machine that has been taken over.
+
+## 10. Import your documents
+
+```bash
+pless docs scan ~/Documents --hashes   # survey first: sizes, duplicates, anything unsupported
+pless docs upload ~/Documents
+```
+
+Expect this to take days rather than hours. Paperless OCRs documents one at a time, and on a Pi
+that is the bottleneck — uploading is the fast part. The command stops when there is nothing to
+do right now; run it again to collect the rest.
+
+Your nightly backup will **skip** while this runs, because the exporter needs a quiet task queue.
+That is expected and `pless backup status` shows it as a skip, not a failure.
+
+See [Importing a collection](../cookbook/importing.md).
+
 ## After a reboot
 
 The archive stays locked until you unlock it — including after a kernel update reboots the

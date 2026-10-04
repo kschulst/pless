@@ -74,6 +74,10 @@ pless deploy paperless
 pless tailscale up
 pless harden --confirm
 pless audit
+pless b2 provision --bucket <name>
+pless backup init
+pless backup verify
+pless docs upload ~/Documents
 ```
 
 The firewall rules matter more here than at home: a cloud server is exposed to the entire
