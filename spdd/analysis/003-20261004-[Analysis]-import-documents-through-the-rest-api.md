@@ -240,20 +240,52 @@ that follows what `pless` already does rather than what ADR 0012 assumed.
 
 Nine criteria: seven addressable, one partial by nature, one deliberately deferred.
 
-### Open questions, for grilling
+### Open questions — settled
 
-In the order they change the shape of the work:
+All six were answered before a canvas was written, three in conversation and three as routine
+calls with the reasoning stated.
 
-1. **How does the operator's machine reach the API?** A tunnel `pless` opens, Tailscale as
-   ADR 0012 assumed, or streaming to the target and posting from there. This decides whether
-   import has a precondition beyond SSH.
-2. **What happens to the nightly backup during a multi-day import?** The quiescence guard fails
-   the run while the queue is busy. Options include a longer timeout, a skip that is not a
-   failure, or a deliberate pause — and this is a change to backup, not to import.
-3. **Should `pless` obtain the API token itself** from the admin credentials it already holds,
-   rather than asking the operator to create one in the UI?
-4. **What is the third state** for a document Paperless will never successfully consume, and does
-   the operator have to acknowledge it?
-5. **Where does the manifest live, and is it permanent?** It is the first durable state `pless`
-   keeps on the operator's machine.
-6. **What does `upload` do with files `scan` classified as needing conversion?**
+**1. Reachability: Tailscale, as ADR 0012 already assumed.** The analysis recommended an SSH
+tunnel on the grounds that import would otherwise carry a precondition no other command has.
+That weighting was wrong. [ADR 0004](../../adr/0004-access-through-tailscale-only.md) makes
+Tailscale the only way in, and `pless harden` closes everything else — so after hardening the
+operator is on the tailnet by necessity, or they cannot reach the machine with SSH either. The
+precondition exists only in the window before `pless tailscale up`, which is a documented step
+of the install flow.
+
+Implementable without parsing `[host]`: `tailscale.status(target)` already returns the
+machine's own DNS name over SSH, so `pless` asks the target what it is called and then talks
+HTTP to that name. Works whether `[host]` is an address or an `ssh_config` alias.
+
+**2. A busy queue is a skip, not a failure.** The same shape the locked volume already has:
+`EXIT_SKIPPED`, `SuccessExitStatus=75` in the unit, and a calm message — because a normal state
+must not train the operator to ignore backup alerts, which is the reasoning the existing skip
+rests on.
+
+It needs a boundary, or a queue stuck for an unrelated reason becomes permanently invisible. A
+skip should stop being calm after some number of consecutive days; the canvas decides the shape.
+This is a change to **backup**, not to import.
+
+**3. The API token is read, not fetched — and where secrets live moves to #7.** Import needs
+`PAPERLESS_API_TOKEN` to exist and does not care where it came from, so `docs upload` reads it
+and fails clearly when it is absent. Whether `pless` should obtain one itself was deferred,
+because the question behind it turned out to be larger: secrets on the operator's disk at all.
+Recorded on [#7](https://github.com/kschulst/pless/issues/7), with a recommendation — a command
+per secret rather than a vault integration, which is the pattern restic itself uses. That can
+change the mechanism later without touching import.
+
+**4. A permanently failing document gets its own state.** `failed` is distinct from
+`not-yet-attempted`, and it is not retried by default: a corrupt PDF will fail forever, and
+retrying it every run turns the one thing worth looking at into noise. `--retry-failed` offers
+them again, so the operator asks rather than is asked.
+
+**5. The manifest is permanent, lives beside `pless.toml`, and is keyed by content hash.**
+Permanent because importing a second folder later is the normal case and a hash-keyed manifest
+handles it without a second concept. Beside `pless.toml` because it is about local files, which
+is also why it does *not* go on the target —
+[ADR 0019](../../adr/0019-the-verification-record-lives-on-the-target.md) put the verification
+record there precisely because that record is about the archive, and this one is not.
+
+**6. Files needing conversion are reported and skipped, not refused.** `pless docs scan` already
+names them, and refusing to start would make one unsupported file block an import of ten
+thousand. They are counted in the summary so they are not silently dropped.
