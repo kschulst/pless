@@ -716,7 +716,10 @@ def preflight_cmd(
     audit_clean = False
     if reachable:
         result = sshexec.run(target.ssh_args, "sh -s", timeout=120, input_text=audit.COLLECT_SCRIPT)
-        audit_clean = result.ok and audit.analyse(result.stdout, cfg).ok
+        # Warnings are reported by `pless audit`; only criticals withhold a green
+        # light. A locked volume is a warning, and preflight has its own
+        # dedicated check for that anyway.
+        audit_clean = result.ok and not audit.analyse(result.stdout, cfg).blocking
 
     drill_passed: bool | None = None
     if drill:
@@ -1270,7 +1273,7 @@ def backup_mirror(
     _print_verbatim(output or "Nothing to copy: the destination already has every snapshot.")
     console.print(f"[green bold]✓ Mirrored to {destination}.[/green bold]")
     console.print(
-        "[yellow]•[/yellow] A mirror is not a verified backup. Point [bold]\[backup]"
+        "[yellow]•[/yellow] A mirror is not a verified backup. Point [bold]\\[backup]"
         "restic_repository[/bold] at it and run `pless backup verify` if you want to know "
         "it restores."
     )

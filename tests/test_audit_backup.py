@@ -342,3 +342,88 @@ class TestTheCollectScript:
         }
 
         assert {"backup", "b2auth", "b2bucket"} <= emitted
+
+
+class TestWarningsDoNotBlockReadiness:
+    """`pless preflight` answers whether an installation can be trusted with
+    documents. A warning is by definition something worth knowing that does not
+    disqualify — if every warning blocked, the severity field would be
+    decoration."""
+
+    def _report(self, *findings: audit.Finding) -> audit.AuditReport:
+        return audit.AuditReport(findings=list(findings))
+
+    def _warning(self) -> audit.Finding:
+        return audit.Finding(
+            check="a warning", ok=False, detail="worth knowing", severity=audit.Severity.WARNING
+        )
+
+    def _critical(self) -> audit.Finding:
+        return audit.Finding(check="a critical", ok=False, detail="disqualifying")
+
+    def test_a_warning_is_a_failure_but_not_blocking(self) -> None:
+        report = self._report(self._warning())
+
+        assert report.failures, "pless audit still reports it"
+        assert not report.blocking, "but it does not withhold a green light"
+        assert not report.ok, "and `pless audit` still exits non-zero"
+
+    def test_a_critical_blocks(self) -> None:
+        report = self._report(self._critical())
+
+        assert report.blocking == report.failures
+
+    def test_a_critical_among_warnings_still_blocks(self) -> None:
+        report = self._report(self._warning(), self._critical(), self._warning())
+
+        assert len(report.blocking) == 1
+        assert report.blocking[0].check == "a critical"
+
+    def test_a_clean_report_blocks_nothing(self) -> None:
+        report = self._report(audit.Finding(check="fine", ok=True, detail="fine"))
+
+        assert not report.blocking
+        assert report.ok
+
+    def test_a_locked_volume_does_not_withhold_a_green_light(self) -> None:
+        """The one warning that used to block. A locked volume is the normal
+        state after every reboot, and `preflight` has its own dedicated check
+        for whether the volume is mounted."""
+        finding = audit.check_encrypted_storage([])
+
+        assert not finding.ok
+        assert finding.severity is audit.Severity.WARNING
+        assert finding not in self._report(finding).blocking
+
+
+class TestBackupLocality:
+    """Restored once a warning stopped blocking readiness. A local repository is
+    a durability shortfall, not an exposure one — and it is a first-class
+    citizen here so the whole flow can be drilled without a cloud account."""
+
+    def test_a_local_repository_warns_without_blocking(self) -> None:
+        finding = audit.check_backup_locality("/mnt/backup/restic")
+
+        assert not finding.ok
+        assert finding.severity is audit.Severity.WARNING
+        assert not audit.AuditReport(findings=[finding]).blocking
+        assert "losing the machine" in finding.detail
+
+    @pytest.mark.parametrize(
+        "repository",
+        [
+            "s3:https://s3.eu-central-003.backblazeb2.com/archive",
+            "b2:archive:paperless",
+            "sftp:deploy@host:/srv/restic",
+        ],
+    )
+    def test_an_off_site_repository_passes(self, repository: str) -> None:
+        assert audit.check_backup_locality(repository).ok
+
+    def test_it_is_part_of_the_report_again(self) -> None:
+        report = audit.analyse(
+            collected("restic: present\nbackup-timer: enabled\nverify-timer: enabled"),
+            a_config("/mnt/backup/restic"),
+        )
+
+        assert "backup is off-site" in {f.check for f in report.findings}
