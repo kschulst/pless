@@ -26,9 +26,14 @@ local VM — with two properties most self-hosting guides skip:
 
 !!! warning "Alpha — read this before you rely on it"
 
-    `pless` is under active development and **cannot yet import documents or take backups**.
-    Those are the next two milestones. What works today is documented here; what doesn't is
-    listed in [Status](#status). Don't put your only copy of anything on it yet.
+    `pless` is under active development. Import, backup, restore and the restore rehearsal all
+    work and are covered by tests, but **the full flow has not been drilled on real Raspberry Pi
+    hardware** ([#4](https://github.com/kschulst/pless/issues/4)) and the Hetzner target has
+    never been run against the live API ([#5](https://github.com/kschulst/pless/issues/5)).
+
+    Several real bugs in this project were invisible to tests and obvious the moment the code ran
+    on a machine. Keep your originals until `pless backup status` shows a successful run that
+    includes them — `pless preflight` will tell you the same thing.
 
 ## What it looks like
 
@@ -86,13 +91,13 @@ flowchart TB
         end
     end
 
-    subgraph offsite["Off-site — planned"]
+    subgraph offsite["Off-site backup"]
         restic["restic<br/><small>encrypted · incremental</small>"]
-        b2[("Backblaze B2")]
+        b2[("Backblaze B2<br/><small>Object Lock · governance</small>")]
     end
 
     cli -- "SSH · provisioning and day-2 ops" --> host
-    docs -. "REST API upload (planned)" .-> web
+    docs -- "REST API upload over Tailscale" --> web
     cli --- ts
     ts --- host
     web --- pg
@@ -100,11 +105,8 @@ flowchart TB
     web --- tika
     web --- got
     compose --- luks
-    luks -. "nightly snapshot (planned)" .-> restic
+    luks -- "nightly snapshot · systemd timer" --> restic
     restic --> b2
-
-    classDef planned stroke-dasharray: 5 5
-    class offsite,restic,b2 planned
 ```
 
 ## Why not just run Docker Compose yourself?
@@ -151,24 +153,30 @@ each piece:
 | Tailscale access and LAN hardening | :material-check: Working |
 | Exposure auditing | :material-check: Working |
 | Readiness gate (`pless preflight`) | :material-check: Working |
+| Importing your documents (`pless docs upload`) | :material-check: Working |
+| Off-site backup with restic | :material-check: Working |
+| Restore, and the restore rehearsal on a fresh machine | :material-check: Working |
+| Bucket provisioning with Object Lock (`pless b2 provision`) | :material-check: Working |
 | Raspberry Pi as a target | :material-progress-clock: Documented, [awaiting hardware validation](https://github.com/kschulst/pless/issues/4) |
 | Hetzner Cloud as a target | :material-progress-clock: Code and unit tests, [not validated live](https://github.com/kschulst/pless/issues/5) |
-| **Importing your documents** | :material-close: [Not built](https://github.com/kschulst/pless/issues/1) |
-| **Backup, restore, and restore drills** | :material-close: [Not built](https://github.com/kschulst/pless/issues/2) |
-| Alternative unlock methods | :material-close: [Planned](https://github.com/kschulst/pless/issues/6) |
-| Password-manager integration | :material-close: [Planned](https://github.com/kschulst/pless/issues/7) |
-| Web setup wizard | :material-close: [Planned](https://github.com/kschulst/pless/issues/8) |
+| Alternative unlock methods | :material-close: [Not built](https://github.com/kschulst/pless/issues/6) |
+| Secrets from a vault rather than `.env` | :material-close: [Not built](https://github.com/kschulst/pless/issues/7) |
+| Web setup wizard | :material-close: [Not built](https://github.com/kschulst/pless/issues/8) |
 
 ### What comes next
 
-**Import** is the immediate priority — without it there is no archive. **Backup** follows,
-and restore drills ship with it rather than after it, because a backup that has never been
-restored is a belief rather than a backup. Until both exist, `pless preflight` deliberately
-refuses to give a green light.
+The archive and its backup are both built. What is left is **proof on real hardware**: the Pi
+flow is documented and tested but has never run on a Pi ([#4](https://github.com/kschulst/pless/issues/4)),
+and the Hetzner target has never met the live API ([#5](https://github.com/kschulst/pless/issues/5)).
+Given this project's history — a package name that differs between distributions, an apt lock held
+by cloud-init, a service listening on an interface nobody considered — that gap matters more than
+any remaining feature.
 
-Backup will target either a local directory or off-site object storage, and the machine will
-hold a key that **cannot delete** what it has already written — otherwise whoever takes the
-machine takes the rescue with it.
+After that: unlocking without typing the passphrase every time
+([#6](https://github.com/kschulst/pless/issues/6)), resolving secrets from a vault rather than
+`.env` ([#7](https://github.com/kschulst/pless/issues/7)), and a web setup wizard
+([#8](https://github.com/kschulst/pless/issues/8)) — which is why the core modules are kept free
+of `typer` and `rich`.
 
 What is being worked on, and the reasoning behind each piece, lives in the
 [issue tracker](https://github.com/kschulst/pless/issues). This page says what works today;

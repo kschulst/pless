@@ -5,10 +5,17 @@ want it on an SSD. Both are the same job: move an encrypted volume without losin
 
 !!! danger "You need a copy first"
 
-    Every procedure here touches the only copy of your data, and `pless` cannot yet take a
-    backup for you. Copy `/opt/paperless` somewhere else before you start — see
-    [Copy it out by hand](#copy-it-out-by-hand) below. Skipping this is how people lose
-    archives.
+    Every procedure here touches the data volume. Take a backup and confirm it before you start:
+
+    ```console
+    $ pless backup run
+    $ pless backup verify
+    ```
+
+    `verify` restores from the snapshot and checks the documents came back, which is the only
+    thing that distinguishes a backup from a belief. If backup is not configured yet, copy
+    `/opt/paperless` somewhere else by hand — see [Copy it out by hand](#copy-it-out-by-hand)
+    below. Skipping both is how people lose archives.
 
 ## How much room do you need?
 
@@ -139,7 +146,8 @@ present, search returning results. It is your rollback.
 
 ## Copy it out by hand
 
-Until `pless backup` exists, this is how you take a copy:
+`pless backup` exists and is the better answer — this is for when it is not configured yet, or
+when you want a copy that does not depend on restic or a passphrase at all:
 
 ```bash
 pless unlock
@@ -150,6 +158,21 @@ exit
 # from your laptop
 scp <user>@<host>:/tmp/paperless-backup.tar.gz ./
 ```
+
+This is a plaintext archive of your documents, so treat it accordingly: it is the one copy that is
+*not* encrypted ([ADR 0018](https://github.com/kschulst/pless/blob/main/adr/0018-no-plaintext-copy-on-the-operators-machine.md)
+is why `pless` does not make one for you). Delete it from `/tmp` on the target when you are done,
+and do not leave it on a laptop.
+
+With backup configured, prefer:
+
+```console
+$ pless backup run       # a snapshot now
+$ pless backup verify    # restore it and check the documents came back
+```
+
+`pless backup extract` pulls documents back out in the clear when you actually need the files
+rather than the archive.
 
 For a large archive, `rsync` directly to your laptop avoids needing double the space on the
 target:

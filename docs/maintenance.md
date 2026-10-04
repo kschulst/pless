@@ -35,6 +35,39 @@ pless server df          # disk usage
 `pless deploy status` is the one that usually answers the question. A healthy stack shows
 five containers up, with `paperless-webserver-1` marked `(healthy)`.
 
+## Are the backups still happening?
+
+```bash
+pless backup status      # the last run, and whether a restore has been proven
+```
+
+This is the check worth doing weekly, and it answers two different questions. Whether last night's
+snapshot was written, and whether anyone has ever restored one — because the second is the only
+thing that makes the first worth anything.
+
+```console
+$ pless backup status
+Repository: b2
+Timer: active (daily at 02:00)
+Snapshots: 47
+Latest: 9f2a1c04 at 2026-10-04 02:13:41
+✓ Last run 2026-10-04T02:13:41Z: 2431 documents, snapshot 9f2a1c04.
+✓ Verified 2026-10-01T03:00:12Z: Restored 5 of 5 sampled files.
+```
+
+Three states are not failures and should not read as one:
+
+- **Skipped — the volume is locked.** The normal state after a reboot. Run `pless unlock`.
+- **Skipped — the queue is busy.** The normal state during an import, which keeps Paperless
+  consuming for days. It becomes a failure after `[backup] max_busy_skips` runs, by which point an
+  import is no longer a likely explanation.
+- **An expired verification.** A restore proved two weeks ago says little about a repository
+  written to every night since, so it stops counting — `[backup] verify_max_age_days` sets the
+  window. Run `pless backup verify`.
+
+A real failure names what went wrong. `journalctl -u pless-backup.service` on the target has the
+rest, and `pless deploy logs webserver` has the OCR pipeline's side of it.
+
 ## Logs
 
 ```bash

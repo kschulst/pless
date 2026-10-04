@@ -34,6 +34,19 @@ pless harden --confirm       # close SSH to the LAN
 
 Then `pless audit` to confirm the result, and `pless tunnel` to open the web interface.
 
+That gives you a sealed, empty archive. Two steps remain, and they are in this order on purpose:
+
+```bash
+pless b2 provision --bucket <name>   # a bucket whose versions cannot be destroyed
+pless backup init                    # nightly snapshots, off-site
+pless backup verify                  # restore one and check the documents came back
+pless docs upload ~/Documents        # finally, your documents
+```
+
+**Backup before import.** `pless preflight` withholds a green light until a restore has actually
+been performed, because a backup nobody has restored is a belief rather than a backup — and the
+time to discover that is before the archive holds anything you would miss.
+
 Every one of these is safe to run again. If a step fails halfway — a download times out, the
 power goes out — run it again rather than trying to clean up by hand.
 

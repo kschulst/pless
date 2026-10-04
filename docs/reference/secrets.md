@@ -83,7 +83,8 @@ it can be piped into a vault CLI without a header getting in the way.
 |---|---|---|---|
 | LUKS passphrase | Every document, at rest | You, at `pless storage init` | **The documents are gone.** No recovery |
 | `RESTIC_PASSWORD` | Every off-site snapshot | You, before `pless backup init` | **The backup is unreadable.** No recovery |
-| `B2_KEY_ID` / `B2_APPLICATION_KEY` | Write access to the backup bucket | Backblaze B2 console | Reissue — carefully, see below |
+| `B2_KEY_ID` / `B2_APPLICATION_KEY` | Write access to the backup bucket | `pless b2 provision` — **not** the B2 console, [see below](#b2_key_id-and-b2_application_key) | Reissue with `--new-key` |
+| B2 provisioning credential | Creating the bucket and minting the key above | One `b2_create_key` call, [see below](#the-b2-provisioning-credential) | Never stored by pless; create another |
 | `POSTGRES_PASSWORD` | The database, on the encrypted volume | `pless init --secrets` | Reset on the target |
 | `PAPERLESS_SECRET_KEY` | Session and token signing | `pless init --secrets` | Reset; everyone signs in again |
 | `PAPERLESS_ADMIN_PASSWORD` | The Paperless admin account | `pless init --secrets` | Reset on the target |

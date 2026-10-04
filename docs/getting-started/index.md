@@ -34,13 +34,24 @@ flowchart LR
     D --> E["pless tailscale up<br/><small>join your tailnet</small>"]
     E --> F["pless harden<br/><small>close the LAN</small>"]
     F --> G["pless audit<br/><small>prove it</small>"]
+    G --> H["pless b2 provision<br/><small>a bucket that<br/>resists deletion</small>"]
+    H --> I["pless backup init<br/><small>nightly, off-site</small>"]
+    I --> J["pless backup verify<br/><small>restore it and check</small>"]
+    J --> K["pless docs upload<br/><small>your documents</small>"]
 ```
 
 Each step is a single command, and every one of them is safe to run twice. The order matters
 in exactly one place: `harden` refuses to run until Tailscale is confirmed working, so you
 cannot lock yourself out by getting ahead of yourself.
 
-Budget roughly an hour for a first run, most of it spent waiting for downloads.
+**Backup comes before import, deliberately.** `pless preflight` withholds a green light until a
+restore has actually been performed, because a backup nobody has restored is a belief rather than
+a backup — and the moment to find that out is before the archive holds anything you care about.
+
+Budget roughly an hour to get through `pless audit`, most of it spent waiting for downloads.
+Importing is separate and much slower: Paperless OCRs documents one at a time, so a few
+thousand of them is days of background work. See
+[Importing a collection](../cookbook/importing.md).
 
 ## What it costs to run
 
