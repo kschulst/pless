@@ -445,8 +445,14 @@ import rather than after.
 
 ### `pless audit [--json]`
 
-Checks network exposure and storage encryption. Exits non-zero on findings, so it works in
-cron and CI. See [Verify your box is sealed](../cookbook/verify-security.md).
+Checks network exposure and storage encryption. Exits non-zero on **any** finding, warnings
+included, so it works in cron and CI — this is the command you run to scrutinise a machine, and
+"nothing to say" is the right bar for it. See
+[Verify your box is sealed](../cookbook/verify-security.md).
+
+`pless preflight` is the other way round: it withholds a green light only for **critical**
+findings. A warning is worth knowing and does not disqualify an installation from holding
+documents.
 
 **When backup is configured it also checks the bucket behind it**, from the target, in one SSH
 round trip. Three findings, in the order they matter:

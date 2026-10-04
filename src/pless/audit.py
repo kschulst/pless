@@ -51,7 +51,23 @@ class AuditReport:
 
     @property
     def failures(self) -> list[Finding]:
+        """Everything that did not pass, whatever its severity.
+
+        `pless audit` exits non-zero on these, because it is the command you
+        run to scrutinise a machine and "nothing to say" is the right bar there.
+        """
         return [f for f in self.findings if not f.ok]
+
+    @property
+    def blocking(self) -> list[Finding]:
+        """The findings that should stop someone importing documents.
+
+        Criticals only. `pless preflight` answers whether an installation can
+        be trusted with documents, and a warning is by definition something
+        worth knowing that does not disqualify — if every warning blocked, the
+        severity field would be decoration.
+        """
+        return [f for f in self.failures if f.severity is Severity.CRITICAL]
 
     @property
     def ok(self) -> bool:
@@ -465,6 +481,32 @@ def check_bucket_protection(lock: b2.LockConfiguration, required_days: int) -> F
     )
 
 
+def check_backup_locality(repository: str) -> Finding:
+    """A local repository is not an off-site one, and should not read as one.
+
+    A warning rather than a failure: it is a durability shortfall, not an
+    exposure one, and the local repository kind is a first-class citizen here
+    precisely so the whole flow can be drilled without a cloud account.
+    """
+    kind = config.BackupConfig(restic_repository=repository).repository_kind
+    if kind == "local":
+        return Finding(
+            check="backup is off-site",
+            ok=False,
+            detail=(
+                "The repository is a local path. It protects against deletion and corruption, "
+                "and not at all against losing the machine — which is the thing backup exists "
+                "for."
+            ),
+            severity=Severity.WARNING,
+        )
+    return Finding(
+        check="backup is off-site",
+        ok=True,
+        detail=f"The repository is {kind}, which survives the loss of this machine.",
+    )
+
+
 def check_repository_endpoint(repository: str, s3_api_url: str) -> Finding:
     """Does the configured repository name the account that just authenticated?
 
@@ -514,6 +556,7 @@ def analyse(output: str, cfg: config.Config | None = None) -> AuditReport:
 
     if cfg is not None and cfg.backup.is_configured:
         findings.append(check_backup_installed(sections.get("backup", [])))
+        findings.append(check_backup_locality(cfg.backup.restic_repository))
 
         auth_json = "\n".join(sections.get("b2auth", []))
         if auth_json.strip():

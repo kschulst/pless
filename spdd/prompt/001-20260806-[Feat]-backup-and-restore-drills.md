@@ -658,27 +658,32 @@ repository kind is a first-class citizen rather than a test fixture.
      which is the mistake this check exists to catch.
    - Versioning and lifecycle rules are **not** accepted as evidence — they do not stop explicit
      version deletion, and a check that passed on them would certify a destroyable setup.
-5. ~~`check_backup_locality(repository: str) -> Finding`~~ — **dropped.**
+5. `check_backup_locality(repository: str) -> Finding`:
+   - WARNING for a local repository, saying in one sentence that it protects against deletion and
+     corruption but not against loss of the machine.
 
-   !!! note "Dropped during Stage 4"
+   !!! note "Dropped, then restored, during Stage 4"
 
-       Three reasons, found while wiring it up rather than while specifying it.
+       Wiring this up showed that `AuditReport.ok` treated every failing finding as blocking
+       whatever its severity, and `pless preflight` gated a green light on it — so a warning here
+       would have *blocked readiness* over a local repository, contradicting this canvas's own
+       treatment of the local kind as a first-class citizen.
 
-       `AuditReport.ok` treats every `ok=False` finding as blocking, whatever its severity, and
-       `pless preflight` gates a green light on it. So a WARNING here would have made a local
-       repository *block* readiness — a behaviour change nobody asked for, and one that
-       contradicts this canvas treating a local repository as a first-class citizen rather
-       than a test fixture.
+       Rather than change that quietly, it was dropped and the question raised: should a warning
+       block `preflight` at all?
 
-       The information already reaches the operator twice: `pless backup init` prints exactly
-       this caveat, and the configuration reference carries a warning admonition about it.
+       It should not. `preflight` answers whether an installation can be trusted with documents,
+       and a warning is by definition something worth knowing that does not disqualify — if every
+       warning blocked, the severity field would be decoration. The deciding evidence was the one
+       warning that *did* block: "`/opt/paperless` is not mounted", which is the normal state
+       after every reboot, and which `preflight` already checks for itself with a dedicated
+       check. It was gating readiness on something redundant and routine.
 
-       And it is in the wrong audit. A local repository is a durability shortfall, not an
-       exposure one; `pless audit` answers "what can someone on your network reach".
+       `AuditReport` now has `blocking` (criticals only) alongside `failures` (everything).
+       `pless preflight` uses the first; `pless audit` keeps exiting non-zero on the second,
+       because it is the command you run to scrutinise a machine and "nothing to say" is the
+       right bar there. This check came back with it.
 
-       It leaves a real question open, which is not this change's to settle: **should a WARNING
-       finding block `preflight` at all?** Today one does, including the existing encrypted-storage
-       warning. Relaxing that would weaken a guard that predates this work.
 6. `check_repository_endpoint(repository: str, s3_api_url: str) -> Finding`:
    - WARNING when the configured repository does not sit under the account's own
      `apiInfo.storageApi.s3ApiUrl`. The machine key can read that field, so the audit can confirm

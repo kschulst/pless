@@ -134,6 +134,28 @@ class TestATargetThatHangs:
         assert "target reachable" in result.output
 
 
+class TestWarningsDoNotWithholdAGreenLight:
+    """A warning is worth knowing and does not disqualify. The one that used to
+    block was "the volume is not mounted" — the normal state after a reboot, and
+    something `preflight` checks for itself anyway."""
+
+    def test_a_critical_audit_finding_still_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Relaxing the gate must not relax it for the findings that matter."""
+        exposed = CLEAN_AUDIT.replace("127.0.0.1:22", "0.0.0.0:8000")
+
+        def answers(destination, remote_command, timeout=60, input_text=None):
+            if input_text is not None:
+                return sshexec.SshResult(exit_code=0, stdout=exposed, stderr="")
+            return _answers(destination, remote_command, timeout, input_text)
+
+        monkeypatch.setattr(config, "load_config", _load_config)
+        monkeypatch.setattr(sshexec, "run", answers)
+        result = _preflight()
+
+        assert result.exit_code != 0
+        assert "NOT READY" in result.output
+
+
 class TestUnreachableTarget:
     def test_reports_the_target_rather_than_crashing(self, unreachable: None) -> None:
         result = _preflight()
@@ -269,6 +291,12 @@ class TestRestoreVerified:
         result = _preflight()
         assert "A restore has been performed and the documents came back." in _flat(result)
         assert result.exit_code == 0  # nothing blocking left
+
+        # This configuration uses a *local* repository, which `pless audit`
+        # warns about — so this also proves a warning does not withhold a green
+        # light. One used to: "the volume is not mounted", which is the normal
+        # state after a reboot and something preflight checks for itself.
+        assert "exposure audit" in _flat(result)
 
     def test_no_record_is_not_verified(
         self, with_verification: Callable[[str | None], None]
