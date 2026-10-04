@@ -218,3 +218,9 @@ severity language implies.
    decided, and it needs no vault-specific code.
 3. **Settle the overwrite question explicitly** before the write half gets a canvas, because the
    failure mode is an unopenable backup and the mechanism cannot prevent it unaided.
+
+### Outcome
+
+The split was accepted. Reading moved to
+[#37](https://github.com/kschulst/pless/issues/37) and gets the next canvas. #7 keeps its title
+and body and is narrowed to writing; the overwrite question blocks its canvas.
