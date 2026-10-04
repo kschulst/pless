@@ -32,6 +32,7 @@ which is for people *using* `pless`.
 | [0019](0019-the-verification-record-lives-on-the-target.md) | The verification record lives on the target, and names a snapshot | Accepted |
 | [0020](0020-the-machine-key-can-read-the-lock.md) | The machine key can read the lock it depends on | Accepted |
 | [0021](0021-provision-the-bucket-with-a-credential-pless-never-stores.md) | Provision the bucket from pless, with a credential it never stores | Accepted |
+| [0022](0022-secrets-resolve-through-a-command-not-an-integration.md) | Secrets resolve through a command, not an integration | Accepted |
 
 ## Writing a new one
 
